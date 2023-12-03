@@ -36,7 +36,7 @@ open class LLM {
         topP: Float = 0.95,
         temp: Float = 0.8,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 4048,
+        maxTokenCount: Int32 = 2048,
         preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
         postProcess: @escaping (_: String) -> Void = { print($0) },
         update: @MainActor @escaping (_: String) async -> Void = { _ in }
@@ -89,7 +89,7 @@ open class LLM {
         topP: Float = 0.95,
         temp: Float = 0.8,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 4048,
+        maxTokenCount: Int32 = 2048,
         preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
         postProcess: @escaping (_: String) -> Void = { print($0) },
         update: @MainActor @escaping (_: String) async -> Void = { _ in }
