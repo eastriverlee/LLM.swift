@@ -1,5 +1,5 @@
 # LLM.swift
-`LLM.swift` is a simple, and readable library which lets you locally interact with LLMs with ease for macOS, iOS, visionOS, watchOS, tvOS.
+`LLM.swift` is a simple, and readable library which lets you locally interact with LLMs with ease for macOS, iOS, visionOS, watchOS, and tvOS.
 
 ![screenshot](./Screenshot.png)
 
