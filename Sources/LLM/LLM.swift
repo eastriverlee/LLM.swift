@@ -8,10 +8,10 @@ public typealias Chat = (role: Role, content: String)
 
 open class LLM {
     public var model: Model
-    public var history: [(role: Role, content: String)]
+    public var history: [Chat]
     public var preProcess: (_ input: String, _ history: [Chat]) -> String
     public var postProcess: (_ output: String) -> Void
-    public var update: @MainActor (_ output: String) async -> Void
+    public var update: @MainActor (_ output: String) -> Void
     
     public var topK: Int32
     public var topP: Float
@@ -39,7 +39,7 @@ open class LLM {
         maxTokenCount: Int32 = 2048,
         preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
         postProcess: @escaping (_: String) -> Void = { print($0) },
-        update: @MainActor @escaping (_: String) async -> Void = { _ in }
+        update: @MainActor @escaping (_: String) -> Void = { _ in }
     ) {
         llama_backend_init(false)
         let model = llama_load_model_from_file(path.cString(using: .utf8), llama_model_default_params())!
@@ -92,7 +92,7 @@ open class LLM {
         maxTokenCount: Int32 = 2048,
         preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
         postProcess: @escaping (_: String) -> Void = { print($0) },
-        update: @MainActor @escaping (_: String) async -> Void = { _ in }
+        update: @MainActor @escaping (_: String) -> Void = { _ in }
     ) {
         self.init(
             from: url.path,

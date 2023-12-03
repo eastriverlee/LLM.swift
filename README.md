@@ -20,7 +20,7 @@ public enum Role {
 public var history: [Chat]
 public var preProcess: (_ input: String, _ history: [Chat]) -> String
 public var postProcess: (_ output: String) -> Void
-public var update: @MainActor (_ output: String) async -> Void
+public var update: @MainActor (_ output: String) -> Void
 
 public func respond(to input: String) async {
     let processedInput = preProcess(input, history)
