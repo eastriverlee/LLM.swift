@@ -48,7 +48,7 @@ dependencies: [
 ```
 
 ## Example
-when initializing `LLM` if you provide `endString` parameter, even the output generation will stop when it meets `endString` even if it's not an EOS token. this is useful for making chatbots.
+if you provide `endString` parameter when initializing `LLM`, the output generation will stop when it meets `endString` even if it's not an EOS token. this is useful for making robust chatbots.
 ```swift
 import SwiftUI
 import LLM
