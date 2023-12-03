@@ -4,7 +4,7 @@
 ![screenshot](./Screenshot.png)
 
 ## Overview
-`LLM.swift` is basically a lightweight abstraction layer over `llama.cpp` package, so that it stays performant as possible while is always up to date. It's only a single file library, so you can copy, study and modify the code however you want.
+`LLM.swift` is basically a lightweight abstraction layer over `llama.cpp` package, so that it stays as performant as possible while is always up to date. It's only a single file library, so you can copy, study and modify the code however you want.
 
 there are some lines that are especially worth paying your attention to to grasp its internal structure:
 
