@@ -18,7 +18,8 @@ open class LLM {
     public var temp: Float
     public var historyLimit: Int
     
-    private var context: Context!
+    private let context: Context
+    private var batch: llama_batch
     private let maxTokenCount: Int
     private let totalTokenCount: Int
     private let newlineToken: Token
@@ -45,11 +46,13 @@ open class LLM {
         params = llama_context_default_params()
         let processorCount = UInt32(ProcessInfo().processorCount)
         self.maxTokenCount = Int(min(maxTokenCount, llama_n_ctx_train(model)))
+        batch = llama_batch_init(Int32(self.maxTokenCount), 0, 1)
         params.seed = seed
         params.n_ctx = UInt32(maxTokenCount)
         params.n_batch = params.n_ctx
         params.n_threads = processorCount
         params.n_threads_batch = processorCount
+        context = llama_new_context_with_model(model, params)!
         self.topK = topK
         self.topP = topP
         self.temp = temp
@@ -71,6 +74,8 @@ open class LLM {
     }
     
     deinit {
+        llama_batch_free(batch)
+        llama_free(context)
         llama_free_model(model)
         llama_backend_free()
     }
@@ -128,7 +133,6 @@ open class LLM {
         return token
     }
     
-    private var batch: llama_batch!
     private var currentCount: Int32!
     private var decoded = ""
     
@@ -153,11 +157,9 @@ open class LLM {
     
     private func getResponse(from input: String) -> AsyncStream<String> {
         .init { output in Task {
-            context = llama_new_context_with_model(model, params); defer { llama_free(context) }
             var tokens = encode(input)
             let initialCount = tokens.count
             currentCount = Int32(initialCount)
-            batch = llama_batch_init(Int32(maxTokenCount), 0, 1); defer { llama_batch_free(batch) }
             for (i, token) in tokens.enumerated() {
                 batch.n_tokens = Int32(i)
                 batch.add(token, batch.n_tokens, [0], i == initialCount - 1)
