@@ -17,7 +17,7 @@ public enum Role {
 ```
 
 ```swift
-public var history: [(role: Role, content: String)]
+public var history: [Chat]
 public var preProcess: (_ input: String, _ history: [Chat]) -> String
 public var postProcess: (_ output: String) -> Void
 public var update: @MainActor (_ output: String) async -> Void
