@@ -1,5 +1,7 @@
 # LLM.swift
 `LLM.swift` is a simple, and readable library which lets you locally interact with LLMs with ease for macOS, iOS, visionOS, watchOS, and tvOS.
+> [!IMPORTANT]  
+> for iOS, physical device is required instead of simulator and sometimes has to tinker with `maxTokenCount` for initialization.
 
 ![screenshot](./Screenshot.png)
 
