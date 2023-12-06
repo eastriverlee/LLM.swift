@@ -203,7 +203,7 @@ open class LLM {
     }
     
     public func decode(_ tokens: [Token]) -> String {
-        struct multibyte { static var character: [CChar] = [] }
+        struct multibyte { static var character: [CUnsignedChar] = [] }
         return tokens.reduce("", { $0 + model.decode($1, with: &multibyte.character) } )
     }
     
@@ -223,27 +223,27 @@ extension Model {
     }
     
     public func isEmpty(_ token: Token) -> Bool {
-        var nothing: [CChar] = []
+        var nothing: [UInt8] = []
         return decode(token, with: &nothing).isEmpty && nothing.isEmpty
     }
     
-    public func decode(_ token: Token, with multibyteCharacter: inout [CChar]) -> String {
+    public func decode(_ token: Token, with multibyteCharacter: inout [CUnsignedChar]) -> String {
         var bufferLength = 16
         var buffer: [CChar] = .init(repeating: 0, count: bufferLength)
-        var length = llama_token_to_piece(self, token, &buffer, Int32(bufferLength))
-        guard 0 != length else { return "" }
-        if length < 0 {
-            bufferLength *= 2
+        let actualLength = Int(llama_token_to_piece(self, token, &buffer, Int32(bufferLength)))
+        guard 0 != actualLength else { return "" }
+        if actualLength < 0 {
+            bufferLength = -actualLength
             buffer = .init(repeating: 0, count: bufferLength)
-            length = llama_token_to_piece(self, token, &buffer, Int32(bufferLength))
+            llama_token_to_piece(self, token, &buffer, Int32(bufferLength))
+        } else {
+            buffer.removeLast(bufferLength - actualLength)
         }
-        buffer.removeLast(bufferLength - Int(length))
         if multibyteCharacter.isEmpty, let decoded = String(cString: buffer + [0], encoding: .utf8) {
             return decoded
         }
-        multibyteCharacter.append(contentsOf: buffer)
-        let data = Data(multibyteCharacter.map { UInt8(bitPattern: $0) })
-        guard let decoded = String(data: data, encoding: .utf8) else { return "" }
+        multibyteCharacter.append(contentsOf: buffer.map { CUnsignedChar(bitPattern: $0) })
+        guard let decoded = String(data: .init(multibyteCharacter), encoding: .utf8) else { return "" }
         multibyteCharacter.removeAll(keepingCapacity: true)
         return decoded
     }
