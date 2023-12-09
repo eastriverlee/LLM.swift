@@ -176,43 +176,32 @@ open class LLM {
             static var letters: [CChar] = []
         }
         guard token != llama_token_eos(model) else { return false }
-        let word = decode(token)
+        var word = decode(token)
+        guard let endString else { output.yield(word); return true }
         var found = 0 < saved.endIndex
         var letters: [CChar] = []
-        if let endString {
-            for letter in word.utf8CString {
-                guard letter != 0 else { break }
-                if letter == endString[saved.endIndex] {
-                    saved.endIndex += 1
-                    found = true
-                    saved.letters.append(letter)
-                    if saved.endIndex == endStringCount {
-                        saved.endIndex = 0
-                        saved.letters.removeAll()
-                        return false
-                    }
-                } else {
-                    if found {
-                        saved.endIndex = 0
-                        if saved.letters.isEmpty {
-                            output.yield(word)
-                        } else {
-                            output.yield(String(cString: saved.letters + [0]) + word)
-                            saved.letters.removeAll()
-                        }
-                        return true
-                    }
-                    letters.append(letter)
+        for letter in word.utf8CString {
+            guard letter != 0 else { break }
+            if letter == endString[saved.endIndex] {
+                saved.endIndex += 1
+                found = true
+                saved.letters.append(letter)
+                guard saved.endIndex == endStringCount else { continue }
+                saved.endIndex = 0
+                saved.letters.removeAll()
+                return false
+            } else if found {
+                saved.endIndex = 0
+                if !saved.letters.isEmpty {
+                    word = String(cString: saved.letters + [0]) + word
+                    saved.letters.removeAll()
                 }
-            }
-        }
-        if !letters.isEmpty {
-            if !found {
                 output.yield(word)
-            } else {
-                output.yield(String(cString: letters + [0]))
+                return true
             }
+            letters.append(letter)
         }
+        if !letters.isEmpty { output.yield(found ? String(cString: letters + [0]) : word) }
         return true
     }
     
