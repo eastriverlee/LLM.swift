@@ -23,8 +23,8 @@ open class LLM {
     private let maxTokenCount: Int
     private let totalTokenCount: Int
     private let newlineToken: Token
-    private let endTokens: [Token]
-    private let endTokenCount: Int
+    private let endString: ContiguousArray<CChar>?
+    private let endStringCount: Int
     private var params: llama_context_params
     private var isFull = false
     
@@ -63,14 +63,9 @@ open class LLM {
         self.update = update
         self.totalTokenCount = Int(llama_n_vocab(model))
         self.newlineToken = llama_token_nl(model)
-        if let endString {
-            endTokens = model.encodeOnly(endString)
-            endTokenCount = endTokens.count
-        } else {
-            endTokens = []
-            endTokenCount = 0
-        }
-            batch = llama_batch_init(Int32(self.maxTokenCount), 0, 1)
+        self.endString = endString?.utf8CString
+        self.endStringCount = (self.endString?.count ?? 1) - 1
+        batch = llama_batch_init(Int32(self.maxTokenCount), 0, 1)
     }
     
     deinit {
@@ -133,27 +128,7 @@ open class LLM {
     private var currentCount: Int32!
     private var decoded = ""
     
-    private func checkKind(of token: Token) -> Token.Kind {
-        struct endToken { static var index = 0 }
-        if token == llama_token_eos(model) {
-            endToken.index = 0
-            return .end
-        }
-        if 0 < endTokenCount && endTokens[endToken.index] == token {
-            endToken.index += 1
-            if endTokenCount == endToken.index {
-                endToken.index = 0
-                return .end
-            } else {
-                return .couldBeEnd
-            }
-        }
-        endToken.index = 0
-        return .normal
-    }
-    
-    private func prepare(from input: consuming String, to output: borrowing AsyncStream<String>.Continuation) {
-        isFull = false
+    private func prepare(from input: consuming String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
         context = .init(model, params)
         var tokens = encode(input)
         var initialCount = tokens.count
@@ -162,7 +137,7 @@ open class LLM {
             if history.isEmpty {
                 isFull = true
                 output.yield("Input is too long.")
-                return
+                return false
             } else {
                 history.removeFirst(2)
                 tokens = encode(preProcess(self.input, history))
@@ -175,10 +150,11 @@ open class LLM {
             batch.add(token, batch.n_tokens, [0], i == initialCount - 1)
         }
         context.decode(batch)
+        return true
     }
     
     private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
-        multibyte.character.removeAll()
+        multibyteCharacter.removeAll()
         var input = ""
         if 2 < history.count {
             history.removeFirst(2)
@@ -194,26 +170,59 @@ open class LLM {
         }
     }
     
-    private func getResponse(from input: String) -> AsyncStream<String> {
+    private func process(_ token: Token, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
+        struct saved {
+            static var endIndex = 0
+            static var letters: [CChar] = []
+        }
+        guard token != llama_token_eos(model) else { return false }
+        let word = decode(token)
+        var found = 0 < saved.endIndex
+        var letters: [CChar] = []
+        if let endString {
+            for letter in word.utf8CString {
+                guard letter != 0 else { break }
+                if letter == endString[saved.endIndex] {
+                    saved.endIndex += 1
+                    found = true
+                    saved.letters.append(letter)
+                    if saved.endIndex == endStringCount {
+                        saved.endIndex = 0
+                        saved.letters.removeAll()
+                        return false
+                    }
+                } else {
+                    if found {
+                        saved.endIndex = 0
+                        if saved.letters.isEmpty {
+                            output.yield(word)
+                        } else {
+                            output.yield(String(cString: saved.letters + [0]) + word)
+                            saved.letters.removeAll()
+                        }
+                        return true
+                    }
+                    letters.append(letter)
+                }
+            }
+        }
+        if !letters.isEmpty {
+            if !found {
+                output.yield(word)
+            } else {
+                output.yield(String(cString: letters + [0]))
+            }
+        }
+        return true
+    }
+    
+    private func getResponse(from input: borrowing String) -> AsyncStream<String> {
         .init { output in Task {
-            prepare(from: input, to: output)
-            if isFull { return output.finish() }
-            var tokens: [Token] = []
+            guard prepare(from: input, to: output) else { return output.finish() }
             var response: [String] = []
             while currentCount < maxTokenCount {
                 let token = await predictNextToken()
-                switch checkKind(of: token) {
-                case .couldBeEnd:
-                    tokens.append(token)
-                case .end:
-                    return output.finish()
-                case .normal:
-                    tokens.append(token)
-                    let word = decode(tokens)
-                    output.yield(word)
-                    response.append(word)
-                    tokens.removeAll(keepingCapacity: true)
-                }
+                if !process(token, to: output) { return output.finish() }
                 currentCount += 1
             }
             await finishResponse(from: &response, to: output)
@@ -245,13 +254,13 @@ open class LLM {
         isAvailable = true
     }
     
-    struct multibyte { static var character: [CUnsignedChar] = [] }
-    public func decode(_ tokens: [Token]) -> String {
-        return tokens.reduce("", { $0 + model.decode($1, with: &multibyte.character) } )
+    private var multibyteCharacter: [CUnsignedChar] = []
+    public func decode(_ token: Token) -> String {
+        return model.decode(token, with: &multibyteCharacter)
     }
     
     @inlinable
-    public func encode(_ text: String) -> [Token] {
+    public func encode(_ text: borrowing String) -> [Token] {
         model.encode(text)
     }
 }
@@ -263,11 +272,6 @@ extension Model {
             return llama_vocab_type(self) == LLAMA_VOCAB_TYPE_SPM
         }
         return addBOS != 0
-    }
-    
-    public func isEmpty(_ token: Token) -> Bool {
-        var nothing: [UInt8] = []
-        return decode(token, with: &nothing).isEmpty && nothing.isEmpty
     }
     
     public func decodeOnly(_ token: Token) -> String {
@@ -296,12 +300,7 @@ extension Model {
         return decoded
     }
 
-    public func encodeOnly(_ text: String) -> [Token] {
-        let tokens = encode("." + text)
-        return .init(tokens.filter({ !isEmpty($0) }).dropFirst())
-    }
-    
-    public func encode(_ text: String) -> [Token] {
+    public func encode(_ text: borrowing String) -> [Token] {
         let addBOS = shouldAddBOS()
         let count = Int32(text.cString(using: .utf8)!.count)
         var tokenCount = count + (addBOS ? 1 : 0)
