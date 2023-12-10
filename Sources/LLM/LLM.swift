@@ -207,6 +207,7 @@ open class LLM {
     
     private func getResponse(from input: borrowing String) -> AsyncStream<String> {
         .init { output in Task {
+            defer { context = nil }
             guard prepare(from: input, to: output) else { return output.finish() }
             var response: [String] = []
             while currentCount < maxTokenCount {
