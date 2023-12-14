@@ -55,6 +55,9 @@ dependencies: [
 
 ## Example
 if you provide `endString` parameter when initializing `LLM`, the output generation will stop when it meets `endString` even if it's not an EOS token. this is useful for making robust chatbots.
+
+this is a minimal SwiftUI example that i did confirm working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K). `preProcess` function was set to meet the chatML format the model uses, if you don't set one like this, it's gonna be a regular completion inference, rather than a chatbot. change the function depending on what format the model uses.
+
 ```swift
 import SwiftUI
 import LLM
