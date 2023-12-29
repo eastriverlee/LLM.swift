@@ -222,20 +222,13 @@ open class LLM {
     
     private var input: String = ""
     private var isAvailable = true
-    public func respond(to input: String) async {
+    public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
         self.input = input
         let processedInput = preProcess(input, history)
         let response = getResponse(from: processedInput)
-        var output = ""
-        await update(output)
-        for await responseDelta in response {
-            output += responseDelta
-            await update(output)
-        }
-        output = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if output.isEmpty { output = "..."; await update(output) }
+        let output = await makeOutputFrom(response)
         history += [(.user, input), (.bot, output)]
         if historyLimit < history.count {
             history.removeFirst(2)
@@ -244,6 +237,20 @@ open class LLM {
         isAvailable = true
     }
     
+    public func respond(to input: String) async {
+        await respond(to: input) { response in
+            var output = ""
+            await self.update(output)
+            for await responseDelta in response {
+                output += responseDelta
+                await self.update(output)
+            }
+            output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if output.isEmpty { output = "..."; await self.update(output) }
+            return output
+        }
+    }
+
     private var multibyteCharacter: [CUnsignedChar] = []
     public func decode(_ token: Token) -> String {
         return model.decode(token, with: &multibyteCharacter)
