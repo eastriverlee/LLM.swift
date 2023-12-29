@@ -10,7 +10,8 @@
 ![screenshot](./Screenshot.png)
 
 ## Overview
-`LLM.swift` is basically a lightweight abstraction layer over `llama.cpp` package, so that it stays as performant as possible while is always up to date. It's only a single file library, so you can copy, study and modify the code however you want.
+`LLM.swift` is basically a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp) package, so that it stays as performant as possible while is always up to date. so theoretically, any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
+It's only a single file library, so you can copy, study and modify the code however you want.
 
 there are some lines that are especially worth paying your attention to to grasp its internal structure:
 
@@ -64,7 +65,7 @@ there are three functions users can define when initializing `LLM` class:
 they are used in `respond` function.
 
 ### preProcess
-`preProcess` is commonly used for making the user input conform to a chat template.
+`preProcess` is commonly used for making the user input conform to a chat template. if you don't provide this, `LLM` will just work as a completion model.
 
 for example, this is the `ChatML` template, that is adopted by many chat models:
 ```
@@ -111,7 +112,7 @@ dependencies: [
 ## Example
 if you provide `endString` parameter when initializing `LLM`, the output generation will stop when it meets `endString` even if it's not an EOS token. this is useful for making robust chatbots.
 
-this is a minimal SwiftUI example that i did use for testing. it's working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K). `preProcess` function was set to meet the chatML format the model uses, if you don't set one like this, it's gonna be regular completion inference, rather than a chatbot. change the function depending on which format the model uses.
+this is a minimal SwiftUI example that i did use for testing. it's working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
 
 ```swift
 import SwiftUI
