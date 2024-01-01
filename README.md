@@ -70,11 +70,9 @@ they are used in `respond` function.
 for example, this is the `ChatML` template, that is adopted by many chat models:
 ```
 <|im_start|>system 
-SYSTEM PROMPT
-<|im_end|> 
+SYSTEM PROMPT<|im_end|> 
 <|im_start|>user 
-USER PROMPT
-<|im_end|> 
+USER PROMPT<|im_end|> 
 <|im_start|>assistant 
 ```
 
