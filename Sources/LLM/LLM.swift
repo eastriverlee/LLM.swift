@@ -43,7 +43,11 @@ open class LLM {
         update: @MainActor @escaping (_: String) -> Void = { _ in }
     ) {
         self.path = path.cString(using: .utf8)!
-        let model = llama_load_model_from_file(self.path, llama_model_default_params())!
+        var modelParams = llama_model_default_params()
+#if targetEnvironment(simulator)
+        modelParams.n_gpu_layers = 0
+#endif
+        let model = llama_load_model_from_file(self.path, modelParams)!
         params = llama_context_default_params()
         let processorCount = UInt32(ProcessInfo().processorCount)
         self.maxTokenCount = Int(min(maxTokenCount, llama_n_ctx_train(model)))
