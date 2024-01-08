@@ -302,9 +302,9 @@ extension Model {
     }
 
     public func encode(_ text: borrowing String) -> [Token] {
-        let addBOS = shouldAddBOS()
+        let addBOS = true
         let count = Int32(text.cString(using: .utf8)!.count)
-        var tokenCount = count + (addBOS ? 1 : 0)
+        var tokenCount = count + 1
         let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount)); defer { cTokens.deallocate() }
         tokenCount = llama_tokenize(self, text, count, cTokens, tokenCount, addBOS, false)
         let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
