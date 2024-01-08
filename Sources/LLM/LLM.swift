@@ -237,7 +237,7 @@ open class LLM {
         isAvailable = true
     }
     
-    public func respond(to input: String) async {
+    open func respond(to input: String) async {
         await respond(to: input) { response in
             var output = ""
             await self.update(output)
