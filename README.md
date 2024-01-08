@@ -44,7 +44,7 @@ public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStrea
     isAvailable = true
 }
 
-public func respond(to input: String) async {
+open func respond(to input: String) async {
     await respond(to: input) { response in
         var output = ""
         await self.update(output)
@@ -58,6 +58,9 @@ public func respond(to input: String) async {
     }
 }
 ```
+> [!TIP]  
+> as you can see, `func respond(to input: String) async` has an `open` access, so that you can override it when your class inherits `LLM`.
+
 there are three functions users can define when initializing `LLM` class:
 * `var preProcess: (_ input: String, _ history: [Chat]) -> String`
 * `var postProcess: (_ output: String) -> Void`
@@ -89,7 +92,6 @@ self.preProcess = { input, history in
     return processed
 }
 ```
-
 
 ### postProcess
 `postProcess` can be used for executing according to the `output` just made using user input.
