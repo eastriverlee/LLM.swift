@@ -8,9 +8,27 @@ public typealias Chat = (role: Role, content: String)
 open class LLM {
     public var model: Model
     public var history: [Chat]
-    public var preProcess: (_ input: String, _ history: [Chat]) -> String
-    public var postProcess: (_ output: String) -> Void
-    public var update: @MainActor (_ output: String) -> Void
+    public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, history in return input }
+    public var postProcess: (_ output: String) -> Void = { print($0) }
+    public var update: @MainActor (_ output: String) -> Void = { _ in }
+    public var template: Template? = nil {
+        didSet {
+            guard let template else {
+                preProcess = { input, history in return input }
+                stopSequence = nil
+                stopSequenceLength = 0
+                return
+            }
+            preProcess = template.preProcess
+            if let stopSequence = template.stopSequence?.utf8CString {
+                self.stopSequence = stopSequence
+                stopSequenceLength = stopSequence.count - 1
+            } else {
+                stopSequence = nil
+                stopSequenceLength = 0
+            }
+        }
+    }
     
     public var topK: Int32
     public var topP: Float
@@ -23,24 +41,21 @@ open class LLM {
     private let maxTokenCount: Int
     private let totalTokenCount: Int
     private let newlineToken: Token
-    private let endString: ContiguousArray<CChar>?
-    private let endStringCount: Int
+    private var stopSequence: ContiguousArray<CChar>?
+    private var stopSequenceLength: Int
     private var params: llama_context_params
     private var isFull = false
     
     public init(
         from path: String,
-        endString: String? = nil,
+        stopSequence: String? = nil,
         history: [Chat] = [],
         seed: UInt32 = .random(in: .min ... .max),
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048,
-        preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
-        postProcess: @escaping (_: String) -> Void = { print($0) },
-        update: @MainActor @escaping (_: String) -> Void = { _ in }
+        maxTokenCount: Int32 = 2048
     ) {
         self.path = path.cString(using: .utf8)!
         var modelParams = llama_model_default_params()
@@ -62,13 +77,10 @@ open class LLM {
         self.historyLimit = historyLimit
         self.model = model
         self.history = history
-        self.preProcess = preProcess
-        self.postProcess = postProcess
-        self.update = update
         self.totalTokenCount = Int(llama_n_vocab(model))
         self.newlineToken = llama_token_nl(model)
-        self.endString = endString?.utf8CString
-        self.endStringCount = (self.endString?.count ?? 1) - 1
+        self.stopSequence = stopSequence?.utf8CString
+        self.stopSequenceLength = (self.stopSequence?.count ?? 1) - 1
         batch = llama_batch_init(Int32(self.maxTokenCount), 0, 1)
     }
     
@@ -78,31 +90,49 @@ open class LLM {
     
     public convenience init(
         from url: URL,
-        endString: String? = nil,
+        stopSequence: String? = nil,
         history: [Chat] = [],
         seed: UInt32 = .random(in: .min ... .max),
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048,
-        preProcess: @escaping (_: String, _: [Chat]) -> String = { input, history in return input },
-        postProcess: @escaping (_: String) -> Void = { print($0) },
-        update: @MainActor @escaping (_: String) -> Void = { _ in }
+        maxTokenCount: Int32 = 2048
     ) {
         self.init(
             from: url.path,
-            endString: endString,
+            stopSequence: stopSequence,
             history: history,
             seed: seed,
             topK: topK,
             topP: topP,
             temp: temp,
             historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount,
-            preProcess: preProcess,
-            postProcess: postProcess,
-            update: update
+            maxTokenCount: maxTokenCount
+        )
+    }
+    
+    public convenience init(
+        from url: URL,
+        template: Template,
+        history: [Chat] = [],
+        seed: UInt32 = .random(in: .min ... .max),
+        topK: Int32 = 40,
+        topP: Float = 0.95,
+        temp: Float = 0.8,
+        historyLimit: Int = 8,
+        maxTokenCount: Int32 = 2048
+    ) {
+        self.init(
+            from: url.path,
+            stopSequence: template.stopSequence,
+            history: history,
+            seed: seed,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            historyLimit: historyLimit,
+            maxTokenCount: maxTokenCount
         )
     }
     
@@ -181,16 +211,16 @@ open class LLM {
         }
         guard token != llama_token_eos(model) else { return false }
         var word = decode(token)
-        guard let endString else { output.yield(word); return true }
+        guard let stopSequence else { output.yield(word); return true }
         var found = 0 < saved.endIndex
         var letters: [CChar] = []
         for letter in word.utf8CString {
             guard letter != 0 else { break }
-            if letter == endString[saved.endIndex] {
+            if letter == stopSequence[saved.endIndex] {
                 saved.endIndex += 1
                 found = true
                 saved.letters.append(letter)
-                guard saved.endIndex == endStringCount else { continue }
+                guard saved.endIndex == stopSequenceLength else { continue }
                 saved.endIndex = 0
                 saved.letters.removeAll()
                 return false
@@ -365,4 +395,88 @@ extension Token {
 public enum Role {
     case user
     case bot
+}
+
+public struct Template {
+    public typealias Attachment = (prefix: String, suffix: String)
+    public let system: Attachment
+    public let user: Attachment
+    public let bot: Attachment
+    public let systemPrompt: String?
+    public let stopSequence: String?
+    public let prefix: String
+    public let shouldDropLast: Bool
+    
+    public init(
+        prefix: String = "",
+        system: Attachment? = nil,
+        user: Attachment? = nil,
+        bot: Attachment? = nil,
+        stopSequence: String? = nil,
+        systemPrompt: String?,
+        shouldDropLast: Bool = false
+    ) {
+        self.system = system ?? ("", "")
+        self.user = user  ?? ("", "")
+        self.bot = bot ?? ("", "")
+        self.stopSequence = stopSequence
+        self.systemPrompt = systemPrompt
+        self.prefix = prefix
+        self.shouldDropLast = shouldDropLast
+    }
+    
+    public var preProcess: (_ input: String, _ history: [Chat]) -> String {
+        return { [self] input, history in
+            var processed = prefix
+            if let systemPrompt {
+                processed += "\(system.prefix)\(systemPrompt)\(system.suffix)"
+            }
+            for chat in history {
+                if chat.role == .user {
+                    processed += "\(user.prefix)\(chat.content)\(user.suffix)"
+                } else {
+                    processed += "\(bot.prefix)\(chat.content)\(bot.suffix)"
+                }
+            }
+            processed += "\(user.prefix)\(input)\(user.suffix)"
+            if shouldDropLast {
+                processed += bot.prefix.dropLast()
+            } else {
+                processed += bot.prefix
+            }
+            return processed
+        }
+    }
+    
+    public static func chatML(_ systemPrompt: String? = nil) -> Template {
+        return Template(
+            system: ("<|im_start|>system\n", "<|im_end|>\n"),
+            user: ("<|im_start|>user\n", "<|im_end|>\n"),
+            bot: ("<|im_start|>assistant\n", "<|im_end|>\n"),
+            stopSequence: "<|im_end|>",
+            systemPrompt: systemPrompt
+        )
+    }
+    
+    public static func alpaca(_ systemPrompt: String? = nil) -> Template {
+        return Template(
+            system: ("", "\n\n"),
+            user: ("### Instruction:\n", "\n\n"),
+            bot: ("### Response:\n", "\n\n"),
+            stopSequence: "###",
+            systemPrompt: systemPrompt
+        )
+    }
+    
+    public static func llama(_ systemPrompt: String? = nil) -> Template {
+        return Template(
+            prefix: "<s>[INST] ",
+            system: ("<<SYS>>\n", "\n<</SYS>>\n\n"),
+            user: ("", " [/INST]"),
+            bot: (" ", "</s><s>[INST] "),
+            stopSequence: "</s>",
+            systemPrompt: systemPrompt,
+            shouldDropLast: true
+        )
+    }
 }

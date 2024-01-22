@@ -19,13 +19,19 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ggerganov/llama.cpp/", branch: "master"),
+        .package(url: "https://github.com/kishikawakatsumi/swift-power-assert", from: "0.12.0"),
     ],
     targets: [
         .target(
             name: "LLM",
             dependencies: [
                 .product(name: "llama", package: "llama.cpp")
-            ]
-        )
+            ]),
+        .testTarget(
+            name: "LLMTests",
+            dependencies: [
+                .product(name: "PowerAssert", package: "swift-power-assert"),
+                "LLM"
+            ]),
     ]
 )

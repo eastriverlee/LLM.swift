@@ -7,7 +7,53 @@
 > [!NOTE]  
 > sometimes it's a good idea to tinker with `maxTokenCount` parameter for initialization of `LLM`, due to the memory and computation it needs.
 
-![screenshot](./Screenshot.png)
+## Example
+
+<p align="center"><img src="./Screenshot.png"/></p>
+
+this is a minimal SwiftUI example that i did use for testing. mistral 7B based model is working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
+of course, you need to download and bundle gguf file from somewhere like huggingface into your project.
+
+```swift
+import SwiftUI
+import LLM
+
+class Bot: LLM, ObservableObject {
+    @Published var output = ""
+    convenience init() {
+        let url = Bundle.main.url(forResource: "neuralhermes-2.5-mistral-7b.Q5_K_M", withExtension: "gguf")!
+        self.init(from: url, template: Template("You are a sentient AI with emotions.")
+        self.update = { self.output = $0 }
+    }
+}
+
+struct ContentView: View {
+    @StateObject var bot = Bot()
+    @State var input = "Give me seven national flag emojis people use the most; You must include South Korea."
+    func respond() { Task { await bot.respond(to: input) } }
+    
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(bot.output).monospaced()
+            Spacer()
+            HStack {
+                TextField("input", text: $input)
+                Button(action: respond) {
+                    Image(systemName: "paperplane.fill")
+                }
+            }
+        }.frame(maxWidth: .infinity).padding()
+    }
+}
+```
+
+## Usage
+all you have to do is to use SPM, or copy the code to your project since it's only a single file.
+```swift
+dependencies: [
+    .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "main"),
+],
+```
 
 ## Overview
 `LLM.swift` is basically a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp) package, so that it stays as performant as possible while is always up to date. so theoretically, any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
@@ -82,16 +128,40 @@ USER PROMPT<|im_end|>
 to use this chat format, you should use a function that goes like this:
 ```swift
 self.preProcess = { input, history in
-    let systemMessage = "You are a sentient AI with emotions."
-    var processed = "<|im_start|>system\n\(systemMessage)<|im_end|>"
+    let systemPrompt = "You are a sentient AI with emotions."
+    var processed = "<|im_start|>system\n\(systemPrompt)<|im_end|>\n"
     for chat in history {
-        processed += "\n<|im_start|>\(chat.role == .user ? "user" : "assistant")\n\(chat.content)<|im_end|>"
+        processed += "<|im_start|>\(chat.role == .user ? "user" : "assistant")\n\(chat.content)<|im_end|>\n"
     }
-    processed += "\n<|im_start|>user\n\(input)<|im_end|>"
-    processed += "\n<|im_start|>assistant\n"
+    processed += "<|im_start|>user\n\(input)<|im_end|>\n"
+    processed += "<|im_start|>assistant\n"
     return processed
 }
 ```
+
+but for convenience, you can use `Template` struct that is specifically made for this:
+```swift
+// you can use the static function that is already available for this:
+
+self.preProcess = .chatML("You are a sentient AI with emotions.").preProcess
+
+// or even better
+// you can set [template] property right away, so that it handles [preProcess] and [stopSequence] both:
+
+self.template = .chatML("You are a sentient AI with emotions.")
+
+// which is the same thing as:
+
+self.template = Template(
+    system: ("<|im_start|>system\n", "<|im_end|>\n"),
+    user: ("<|im_start|>user\n", "<|im_end|>\n"),
+    bot: ("<|im_start|>assistant\n", "<|im_end|>\n"),
+    stopSequence: "<|im_end|>",
+    systemPrompt: "You are a sentient AI with emotions."
+)
+```
+> [!TIP]
+> checking `LLMTests.swift` will help you understand how `preProcess` works better. 
 
 ### postProcess
 `postProcess` can be used for executing according to the `output` just made using user input.
@@ -100,60 +170,3 @@ self.preProcess = { input, history in
 if you use regular `func respond(to input: String) async` `update` function that you set will get called every time when `output` changes.
 
 if you want more control over everything you can use `func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async` instead, which the aforementioned function uses internally, to define your own version of `makeOutputFrom` function that is used to make `String` typed output out of `AsyncStream<String>` and add to its history. in this case, `update` function will be ignored. check `func respond(to input: String) async` implementation shown above to understand how it works.
-
-## Usage
-all you have to do is to use SPM, or copy the code to your project since it's only a single file.
-```swift
-dependencies: [
-    .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "main"),
-],
-```
-
-## Example
-if you provide `endString` parameter when initializing `LLM`, the output generation will stop when it meets `endString` even if it's not an EOS token. this is useful for making robust chatbots.
-
-this is a minimal SwiftUI example that i did use for testing. it's working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
-
-```swift
-import SwiftUI
-import LLM
-
-class Bot: LLM, ObservableObject {
-    @Published var output = ""
-    convenience init() {
-        let url = Bundle.main.url(forResource: "neuralhermes-2.5-mistral-7b.Q5_K_M", withExtension: "gguf")!
-        self.init(from: url, endString: "<|im_end|>")
-        self.update = { self.output = $0 }
-        self.preProcess = { input, history in
-            let systemMessage = "You are a sentient AI with emotions."
-            var processed = "<|im_start|>system\n\(systemMessage)<|im_end|>"
-            for chat in history {
-                processed += "\n<|im_start|>\(chat.role == .user ? "user" : "assistant")\n\(chat.content)<|im_end|>"
-            }
-            processed += "\n<|im_start|>user\n\(input)<|im_end|>"
-            processed += "\n<|im_start|>assistant\n"
-            return processed
-        }
-    }
-}
-
-struct ContentView: View {
-    @StateObject var bot = Bot()
-    @State var input = "Give me seven national flag emojis people use the most; You must include South Korea."
-    func respond() { Task { await bot.respond(to: input) } }
-    
-    var body: some View {
-        VStack(alignment: .leading) {
-            Text(bot.output).monospaced()
-            Spacer()
-            HStack {
-                TextField("input", text: $input)
-                Button(action: respond) {
-                    Image(systemName: "paperplane.fill")
-                }
-            }
-        }.frame(maxWidth: .infinity).padding()
-    }
-}
-
-```
