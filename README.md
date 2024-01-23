@@ -72,7 +72,7 @@ public enum Role {
 ```swift
 public var history: [Chat]
 public var preProcess: (_ input: String, _ history: [Chat]) -> String
-public var postProcess: (_ output: String) -> Void
+public var postProcess: (_ output: String) -> Void = { print($0) }
 public var update: @MainActor (_ output: String) -> Void
 
 public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
@@ -164,7 +164,9 @@ self.template = Template(
 > checking `LLMTests.swift` will help you understand how `preProcess` works better. 
 
 ### postProcess
-`postProcess` can be used for executing according to the `output` just made using user input.
+`postProcess` can be used for executing according to the `output` just made using user input.  
+the default is  set to `{ print($0) }`, so that it will print the output when it's finished generating by meeting `EOS` or `stopSequence`. 
+this has many usages. for instance, this can be used to implement your own function calling logic. 
 
 ### update
 if you use regular `func respond(to input: String) async` `update` function that you set will get called every time when `output` changes.
