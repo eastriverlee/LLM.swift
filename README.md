@@ -71,9 +71,9 @@ public enum Role {
 
 ```swift
 public var history: [Chat]
-public var preProcess: (_ input: String, _ history: [Chat]) -> String
-public var postProcess: (_ output: String) -> Void = { print($0) }
-public var update: @MainActor (_ output: String) -> Void
+public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
+public var postProcess: (_ output: String) -> Void                    = { print($0) }
+public var update: @MainActor (_ output: String) -> Void              = { }
 
 public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
     guard isAvailable else { return }
@@ -105,7 +105,7 @@ open func respond(to input: String) async {
 }
 ```
 > [!TIP]  
-> as you can see, `func respond(to input: String) async` has an `open` access, so that you can override it when your class inherits `LLM`.
+> as you can see, `func respond(to input: String) async` has an `open` access, so that you can override it when your class inherits `LLM` and want some fine grained control over.
 
 there are three functions users can define when initializing `LLM` class:
 * `var preProcess: (_ input: String, _ history: [Chat]) -> String`
