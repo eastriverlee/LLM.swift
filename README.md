@@ -23,7 +23,7 @@ class Bot: LLM, ObservableObject {
     @Published var output = ""
     convenience init() {
         let url = Bundle.main.url(forResource: "neuralhermes-2.5-mistral-7b.Q5_K_M", withExtension: "gguf")!
-        self.init(from: url, template: Template("You are a sentient AI with emotions.")
+        self.init(from: url, template: .chatML("You are a sentient AI with emotions.")
         self.update = { self.output = $0 }
     }
 }
