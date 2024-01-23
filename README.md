@@ -11,8 +11,9 @@
 
 <p align="center"><img src="./Screenshot.png"/></p>
 
-this is a minimal SwiftUI example that i did use for testing. mistral 7B based model is working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
-of course, you need to download and bundle gguf file from somewhere like huggingface into your project.
+> [!NOTE]  
+> this is a minimal SwiftUI example that i did use for testing. mistral 7B based model is working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
+> **OF COURSE, you need to download and bundle gguf file from somewhere like huggingface into your project.**
 
 ```swift
 import SwiftUI
