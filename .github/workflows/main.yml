@@ -1,0 +1,39 @@
+name: Two Tracks for SPM pinning
+on: [push]
+permissions:
+  contents: write
+jobs:
+  run-two-tracks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ggerganov/llama.cpp
+        uses: actions/checkout@v4
+        with: 
+          repository: ggerganov/llama.cpp
+          
+      - name: Get current llama.cpp hash
+        run: |
+          echo "LLAMA_COMMIT_HASH=$( git rev-parse HEAD )" >> $GITHUB_ENV
+          
+      - name: Checkout main
+        uses: actions/checkout@v4
+        
+      - name: Pinning SPM
+        run: |
+          export FROM='"https://github.com/ggerganov/llama.cpp/", branch: "master"'
+          export TO='"https://github.com/ggerganov/llama.cpp/", revision: "${{ env.LLAMA_COMMIT_HASH }}"'
+          sed -i -e "s|$FROM|$TO|" Package.swift
+      
+      - name: Push changes to pinned branch
+        run: | 
+          if git show-ref -q --heads pinned
+          then
+            git switch pinned
+            git pull origin main:pinned
+          else
+            git switch -c pinned
+          fi
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          git commit -am "pin Package.swift"
+          git push -u -f origin pinned
