@@ -56,6 +56,13 @@ dependencies: [
 ],
 ```
 
+optionally, if you care more about stability rather than benefitting from speed of [`llama.cpp`](https://github.com/ggerganov/llama.cpp)'s development cycle you can choose the `pinned` branch with pinned dependency.
+```swift
+dependencies: [
+    .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "pinned"),
+],
+```
+
 ## Overview
 `LLM.swift` is basically a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp) package, so that it stays as performant as possible while is always up to date. so theoretically, any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
 It's only a single file library, so you can copy, study and modify the code however you want.
