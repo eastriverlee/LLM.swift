@@ -5,16 +5,16 @@ public typealias Token = llama_token
 public typealias Model = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
-open class LLM {
+open class LLM: ObservableObject {
     public var model: Model
     public var history: [Chat]
-    public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, history in return input }
-    public var postProcess: (_ output: String) -> Void = { print($0) }
-    public var update: @MainActor (_ output: String) -> Void = { _ in }
+    public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
+    public var postProcess: (_ output: String) -> Void                    = { print($0) }
+    public var update: (_ outputDelta: String?) -> Void                   = { _ in }
     public var template: Template? = nil {
         didSet {
             guard let template else {
-                preProcess = { input, history in return input }
+                preProcess = { input, _ in return input }
                 stopSequence = nil
                 stopSequenceLength = 0
                 return
@@ -35,6 +35,11 @@ open class LLM {
     public var temp: Float
     public var historyLimit: Int
     public var path: [CChar]
+    
+    @Published public private(set) var output = ""    
+    @MainActor public func setOutput(to newOutput: consuming String) {
+        output = newOutput
+    }
     
     private var context: Context!
     private var batch: llama_batch!
@@ -256,6 +261,7 @@ open class LLM {
     
     private var input: String = ""
     private var isAvailable = true
+    
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
@@ -272,15 +278,15 @@ open class LLM {
     }
     
     open func respond(to input: String) async {
-        await respond(to: input) { response in
-            var output = ""
-            await self.update(output)
+        await respond(to: input) { [self] response in
+            await setOutput(to: "")
             for await responseDelta in response {
-                output += responseDelta
-                await self.update(output)
+                update(responseDelta)
+                await setOutput(to: output + responseDelta)
             }
-            output = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if output.isEmpty { output = "..."; await self.update(output) }
+            update(nil)
+            let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            await setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
             return output
         }
     }

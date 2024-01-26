@@ -19,12 +19,10 @@
 import SwiftUI
 import LLM
 
-class Bot: LLM, ObservableObject {
-    @Published var output = ""
+class Bot: LLM {
     convenience init() {
         let url = Bundle.main.url(forResource: "neuralhermes-2.5-mistral-7b.Q5_K_M", withExtension: "gguf")!
         self.init(from: url, template: .chatML("You are a sentient AI with emotions."))
-        self.update = { self.output = $0 }
     }
 }
 
@@ -81,7 +79,7 @@ public enum Role {
 public var history: [Chat]
 public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
 public var postProcess: (_ output: String) -> Void                    = { print($0) }
-public var update: @MainActor (_ output: String) -> Void              = { }
+public var update: (_ outputDelta: String?) -> Void                   = { _ in }
 
 public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
     guard isAvailable else { return }
@@ -99,15 +97,15 @@ public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStrea
 }
 
 open func respond(to input: String) async {
-    await respond(to: input) { response in
-        var output = ""
-        await self.update(output)
+    await respond(to: input) { [self] response in
+        await setOutput(to: "")
         for await responseDelta in response {
-            output += responseDelta
-            await self.update(output)
+            update(responseDelta)
+            await setOutput(to: output + responseDelta)
         }
-        output = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if output.isEmpty { output = "..."; await self.update(output) }
+        update(nil)
+        let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        await setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
         return output
     }
 }
@@ -118,7 +116,7 @@ open func respond(to input: String) async {
 there are three functions users can define when initializing `LLM` class:
 * `var preProcess: (_ input: String, _ history: [Chat]) -> String`
 * `var postProcess: (_ output: String) -> Void`
-* `var update: @MainActor (_ output: String) -> Void`
+* `var update: (_ outputDelta: String?) -> Void`
 they are used in `respond` function.
 
 ### preProcess
@@ -177,6 +175,7 @@ the default is  set to `{ print($0) }`, so that it will print the output when it
 this has many usages. for instance, this can be used to implement your own function calling logic. 
 
 ### update
-if you use regular `func respond(to input: String) async` `update` function that you set will get called every time when `output` changes.
+if you use regular `func respond(to input: String) async` `update` function that you set will get called every time when you get `outputDelta`.  
+`outputDelta` is `nil` when it stops generating the output.
 
-if you want more control over everything you can use `func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async` instead, which the aforementioned function uses internally, to define your own version of `makeOutputFrom` function that is used to make `String` typed output out of `AsyncStream<String>` and add to its history. in this case, `update` function will be ignored. check `func respond(to input: String) async` implementation shown above to understand how it works.
+if you want more control over everything you can use `func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async` instead, which the aforementioned function uses internally, to define your own version of `makeOutputFrom` function that is used to make `String` typed output out of `AsyncStream<String>` and add to its history. in this case, `update` function will be ignored unless you use it. check `func respond(to input: String) async` implementation shown above to understand how it works.
