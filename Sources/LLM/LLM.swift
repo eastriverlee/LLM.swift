@@ -5,6 +5,10 @@ public typealias Token = llama_token
 public typealias Model = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
+@globalActor public actor InferenceActor {
+    static public let shared = InferenceActor()
+}
+
 open class LLM: ObservableObject {
     public var model: Model
     public var history: [Chat]
@@ -140,6 +144,7 @@ open class LLM: ObservableObject {
         self.template = template
     }
 
+    @InferenceActor
     private func predictNextToken() async -> Token {
         let logits = llama_get_logits_ith(context.pointer, batch.n_tokens - 1)!
         var candidates: [llama_token_data] = (0 ..< totalTokenCount).map { token in
@@ -171,11 +176,17 @@ open class LLM: ObservableObject {
         var tokens = encode(input)
         var initialCount = tokens.count
         currentCount = Int32(initialCount)
-        if currentCount >= maxTokenCount {
-            tokens = encode(preProcess(self.input, history))
-            tokens = Array(tokens.suffix(maxTokenCount))
-            initialCount = tokens.count
-            currentCount = Int32(initialCount)
+        if maxTokenCount <= currentCount {
+            if history.isEmpty {
+                isFull = true
+                output.yield("Input is too long.")
+                return false
+            } else {
+                history.removeFirst(min(2, history.count))
+                tokens = encode(preProcess(self.input, history))
+                initialCount = tokens.count
+                currentCount = Int32(initialCount)
+            }
         }
         for (i, token) in tokens.enumerated() {
             batch.n_tokens = Int32(i)
@@ -185,11 +196,12 @@ open class LLM: ObservableObject {
         return true
     }
 
+    @InferenceActor
     private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
         multibyteCharacter.removeAll()
         var input = ""
-        if history.count > 2 {
-            history.removeFirst(2)
+        if !history.isEmpty {
+            history.removeFirst(min(2, history.count))
             input = preProcess(self.input, history)
         } else {
             response.scoup(response.count / 3)
@@ -255,6 +267,7 @@ open class LLM: ObservableObject {
     private var input: String = ""
     private var isAvailable = true
 
+    @InferenceActor
     public func getCompletion(from input: borrowing String) async -> String {
         guard isAvailable else { fatalError("LLM is being used") }
         isAvailable = false
@@ -266,7 +279,8 @@ open class LLM: ObservableObject {
         isAvailable = true
         return output
     }
-
+    
+    @InferenceActor
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
@@ -275,8 +289,9 @@ open class LLM: ObservableObject {
         let response = getResponse(from: processedInput)
         let output = await makeOutputFrom(response)
         history += [(.user, input), (.bot, output)]
-        if historyLimit < history.count {
-            history.removeFirst(2)
+        let historyCount = history.count
+        if historyLimit < historyCount {
+            history.removeFirst(min(2, historyCount))
         }
         postProcess(output)
         isAvailable = true
