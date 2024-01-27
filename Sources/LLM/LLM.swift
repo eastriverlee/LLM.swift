@@ -5,6 +5,10 @@ public typealias Token = llama_token
 public typealias Model = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
+@globalActor public actor InferenceActor {
+    static public let shared = InferenceActor()
+}
+
 open class LLM: ObservableObject {
     public var model: Model
     public var history: [Chat]
@@ -141,6 +145,7 @@ open class LLM: ObservableObject {
         self.template = template
     }
     
+    @InferenceActor
     private func predictNextToken() async -> Token {
         let logits = llama_get_logits_ith(context.pointer, batch.n_tokens - 1)!
         var candidates: [llama_token_data] = (0..<totalTokenCount).map { token in
@@ -192,6 +197,7 @@ open class LLM: ObservableObject {
         return true
     }
     
+    @InferenceActor
     private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
         multibyteCharacter.removeAll()
         var input = ""
@@ -262,6 +268,7 @@ open class LLM: ObservableObject {
     private var input: String = ""
     private var isAvailable = true
     
+    @InferenceActor
     public func getCompletion(from input: borrowing String) async -> String {
         guard isAvailable else { fatalError("LLM is being used") }
         isAvailable = false
@@ -274,6 +281,7 @@ open class LLM: ObservableObject {
         return output
     }
     
+    @InferenceActor
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
