@@ -145,8 +145,14 @@ open class LLM: ObservableObject {
         self.template = template
     }
     
+    private var shouldContinuePredicting = false
+    public func stop() {
+        shouldContinuePredicting = false
+    }
+    
     @InferenceActor
     private func predictNextToken() async -> Token {
+        guard shouldContinuePredicting else { return llama_token_eos(model) }
         let logits = llama_get_logits_ith(context.pointer, batch.n_tokens - 1)!
         var candidates: [llama_token_data] = (0..<totalTokenCount).map { token in
             llama_token_data(id: Int32(token), logit: logits[token], p: 0.0)
@@ -194,6 +200,7 @@ open class LLM: ObservableObject {
             batch.add(token, batch.n_tokens, [0], i == initialCount - 1)
         }
         context.decode(batch)
+        shouldContinuePredicting = true
         return true
     }
     
