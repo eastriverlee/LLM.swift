@@ -178,7 +178,9 @@ open class LLM: ObservableObject {
                 output.yield("Input is too long.")
                 return false
             } else {
-                history.removeFirst(2)
+                if history.count > 2 {
+                    history.removeFirst(2)
+                }
                 tokens = encode(preProcess(self.input, history))
                 initialCount = tokens.count
                 currentCount = Int32(initialCount)
@@ -261,7 +263,7 @@ open class LLM: ObservableObject {
 
     private var input: String = ""
     private var isAvailable = true
-    
+
     public func getCompletion(from input: borrowing String) async -> String {
         guard isAvailable else { fatalError("LLM is being used") }
         isAvailable = false
@@ -273,7 +275,7 @@ open class LLM: ObservableObject {
         isAvailable = true
         return output
     }
-    
+
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
@@ -305,7 +307,7 @@ open class LLM: ObservableObject {
 
     private var multibyteCharacter: [CUnsignedChar] = []
     public func decode(_ token: Token) -> String {
-        return model.decode(token, with: &multibyteCharacter)
+        model.decode(token, with: &multibyteCharacter)
     }
 
     @inlinable
@@ -446,7 +448,7 @@ public struct Template {
     }
 
     public var preProcess: (_ input: String, _ history: [Chat]) -> String {
-        return { [self] input, history in
+        { [self] input, history in
             var processed = prefix
             if let systemPrompt {
                 processed += "\(system.prefix)\(systemPrompt)\(system.suffix)"
@@ -469,7 +471,7 @@ public struct Template {
     }
 
     public static func chatML(_ systemPrompt: String? = nil) -> Template {
-        return Template(
+        Template(
             system: ("<|im_start|>system\n", "<|im_end|>\n"),
             user: ("<|im_start|>user\n", "<|im_end|>\n"),
             bot: ("<|im_start|>assistant\n", "<|im_end|>\n"),
@@ -479,7 +481,7 @@ public struct Template {
     }
 
     public static func alpaca(_ systemPrompt: String? = nil) -> Template {
-        return Template(
+        Template(
             system: ("", "\n\n"),
             user: ("### Instruction:\n", "\n\n"),
             bot: ("### Response:\n", "\n\n"),
@@ -489,7 +491,7 @@ public struct Template {
     }
 
     public static func llama(_ systemPrompt: String? = nil) -> Template {
-        return Template(
+        Template(
             prefix: "<s>[INST] ",
             system: ("<<SYS>>\n", "\n<</SYS>>\n\n"),
             user: ("", " [/INST]"),
@@ -501,17 +503,17 @@ public struct Template {
     }
 
     public static let mistral = Template(
-          prefix: "<s>",
-          user: ("[INST] ", " [/INST]"),
-          bot: ("", "</s> "),
-          stopSequence: "</s>",
-          systemPrompt: nil
-      )
+        prefix: "<s>",
+        user: ("[INST] ", " [/INST]"),
+        bot: ("", "</s> "),
+        stopSequence: "</s>",
+        systemPrompt: nil
+    )
 }
 
 extension Template: CustomStringConvertible {
     public var description: String {
-        return """
+        """
         Template(
             prefix: "\(prefix)",
             system: ("\(system.prefix)", "\(system.suffix)"),
