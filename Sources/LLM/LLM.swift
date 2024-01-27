@@ -49,7 +49,6 @@ open class LLM: ObservableObject {
     private var stopSequence: ContiguousArray<CChar>?
     private var stopSequenceLength: Int
     private var params: llama_context_params
-    private var isFull = false
 
     public init(
         from path: String,
@@ -167,24 +166,16 @@ open class LLM: ObservableObject {
     private var currentCount: Int32!
     private var decoded = ""
 
-    private func prepare(from input: consuming String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
+    private func prepare(from input: consuming String, to _: borrowing AsyncStream<String>.Continuation) -> Bool {
         context = .init(model, params)
         var tokens = encode(input)
         var initialCount = tokens.count
         currentCount = Int32(initialCount)
-        if maxTokenCount <= currentCount {
-            if history.isEmpty {
-                isFull = true
-                output.yield("Input is too long.")
-                return false
-            } else {
-                if history.count > 2 {
-                    history.removeFirst(2)
-                }
-                tokens = encode(preProcess(self.input, history))
-                initialCount = tokens.count
-                currentCount = Int32(initialCount)
-            }
+        if currentCount >= maxTokenCount {
+            tokens = encode(preProcess(self.input, history))
+            tokens = Array(tokens.suffix(maxTokenCount))
+            initialCount = tokens.count
+            currentCount = Int32(initialCount)
         }
         for (i, token) in tokens.enumerated() {
             batch.n_tokens = Int32(i)
