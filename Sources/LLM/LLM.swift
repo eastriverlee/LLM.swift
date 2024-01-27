@@ -178,7 +178,7 @@ open class LLM: ObservableObject {
                 output.yield("Input is too long.")
                 return false
             } else {
-                history.removeFirst(2)
+                history.removeFirst(min(2, history.count))
                 tokens = encode(preProcess(self.input, history))
                 initialCount = tokens.count
                 currentCount = Int32(initialCount)
@@ -282,8 +282,9 @@ open class LLM: ObservableObject {
         let response = getResponse(from: processedInput)
         let output = await makeOutputFrom(response)
         history += [(.user, input), (.bot, output)]
-        if historyLimit < history.count {
-            history.removeFirst(2)
+        let historyCount = history.count
+        if historyLimit < historyCount {
+            history.removeFirst(min(2, historyCount))
         }
         postProcess(output)
         isAvailable = true
