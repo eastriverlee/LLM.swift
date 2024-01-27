@@ -485,4 +485,12 @@ public struct Template {
             shouldDropLast: true
         )
     }
+    
+    public static let mistral = Template(
+        prefix: "<s>",
+        user: ("[INST] ", " [/INST]"),
+        bot: ("", "</s> "),
+        stopSequence: "</s>",
+        systemPrompt: nil
+    )
 }

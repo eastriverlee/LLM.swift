@@ -134,4 +134,22 @@ final class LLMTests: XCTestCase {
         let output = template.preProcess(userPrompt, history)
         #assert(expected == output)
     }
+    
+    func testMistralPreProcessorWithoutHistory() throws {
+        let template = Template.mistral
+        let expected = """
+        <s>[INST] \(userPrompt) [/INST]
+        """
+        let output = template.preProcess(userPrompt, [])
+        #assert(expected == output)
+    }
+    
+    func testMistralPreProcessorWithHistory() throws {
+        let template = Template.mistral
+        let expected = """
+        <s>[INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
+        """
+        let output = template.preProcess(userPrompt, history)
+        #assert(expected == output)
+    }
 }
