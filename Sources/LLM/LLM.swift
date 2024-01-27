@@ -262,6 +262,18 @@ open class LLM: ObservableObject {
     private var input: String = ""
     private var isAvailable = true
     
+    public func getCompletion(from input: borrowing String) async -> String {
+        guard isAvailable else { fatalError("LLM is being used") }
+        isAvailable = false
+        let response = getResponse(from: input)
+        var output = ""
+        for await responseDelta in response {
+            output += responseDelta
+        }
+        isAvailable = true
+        return output
+    }
+    
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
