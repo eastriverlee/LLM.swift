@@ -201,8 +201,8 @@ open class LLM: ObservableObject {
     private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
         multibyteCharacter.removeAll()
         var input = ""
-        if 2 < history.count {
-            history.removeFirst(2)
+        if !history.isEmpty {
+            history.removeFirst(min(2, history.count))
             input = preProcess(self.input, history)
         } else {
             response.scoup(response.count / 3)
