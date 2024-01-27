@@ -1,0 +1,3 @@
+--indent 4
+--swiftversion 5.9
+--disable redundantType,redundantSelf
