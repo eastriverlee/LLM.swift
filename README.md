@@ -30,6 +30,7 @@ struct ContentView: View {
     @StateObject var bot = Bot()
     @State var input = "Give me seven national flag emojis people use the most; You must include South Korea."
     func respond() { Task { await bot.respond(to: input) } }
+    func stop() { bot.stop() }
     
     var body: some View {
         VStack(alignment: .leading) {
@@ -39,6 +40,9 @@ struct ContentView: View {
                 TextField("input", text: $input)
                 Button(action: respond) {
                     Image(systemName: "paperplane.fill")
+                }
+                Button(action: stop) {
+                    Image(systemName: "stop.fill")
                 }
             }
         }.frame(maxWidth: .infinity).padding()
