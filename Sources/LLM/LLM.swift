@@ -6,7 +6,7 @@ public typealias Model = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
 @globalActor public actor InferenceActor {
-    static public let shared = InferenceActor()
+    public static let shared = InferenceActor()
 }
 
 open class LLM: ObservableObject {
@@ -53,6 +53,7 @@ open class LLM: ObservableObject {
     private var stopSequence: ContiguousArray<CChar>?
     private var stopSequenceLength: Int
     private var params: llama_context_params
+    private var isFull = false
 
     public init(
         from path: String,
@@ -148,7 +149,7 @@ open class LLM: ObservableObject {
     public func stop() {
         shouldContinuePredicting = false
     }
-    
+
     @InferenceActor
     private func predictNextToken() async -> Token {
         guard shouldContinuePredicting else { return llama_token_eos(model) }
@@ -177,7 +178,7 @@ open class LLM: ObservableObject {
     private var currentCount: Int32!
     private var decoded = ""
 
-    private func prepare(from input: consuming String, to _: borrowing AsyncStream<String>.Continuation) -> Bool {
+    private func prepare(from input: consuming String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
         context = .init(model, params)
         var tokens = encode(input)
         var initialCount = tokens.count
@@ -286,7 +287,7 @@ open class LLM: ObservableObject {
         isAvailable = true
         return output
     }
-    
+
     @InferenceActor
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
