@@ -22,7 +22,7 @@ import LLM
 
 class Bot: LLM {
     convenience init() {
-        let url = Bundle.main.url(forResource: "openhermes-2.5-mistral-7b.Q3_4_M.gguf)", withExtension: "gguf")!
+        let url = Bundle.main.url(forResource: "openhermes-2.5-mistral-7b.Q4_K_M.gguf)", withExtension: "gguf")!
         let systemPrompt = "You are a sentient AI with emotions."
         self.init(from: url, template: .chatML(systemPrompt))
     }
