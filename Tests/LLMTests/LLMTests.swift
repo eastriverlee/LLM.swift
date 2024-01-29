@@ -3,6 +3,7 @@ import PowerAssert
 @testable import LLM
 
 final class LLMTests: XCTestCase {
+    //MARK: Template tests
     let systemPrompt = "You are a human."
     let userPrompt = "Are you a human or an AI?"
     let history = [Chat(.user, "Hey."), Chat(.bot, "Hi.")]
@@ -151,5 +152,64 @@ final class LLMTests: XCTestCase {
         """
         let output = template.preProcess(userPrompt, history)
         #assert(expected == output)
+    }
+    
+    //MARK: HuggingFaceModel tests
+    lazy var model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", template: .chatML(systemPrompt), with: .Q2_K)
+    let urlString = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf?download=true"
+    
+    func testRegexMatchCaseInsensitivity() async throws {
+        let hasMatch = try! #"(?i)Q2_K"#.hasMatch(in: urlString.lowercased())
+        let expected = true
+        #assert(hasMatch == expected)
+    }
+    
+    func testFilterHasMatch() async throws {
+        let hasMatch = try! model.filterRegexPattern.hasMatch(in: urlString)
+        let expected = true
+        #assert(hasMatch == expected)
+    }
+    
+    func testGetDownloadURLStringsFromHuggingFaceModel() async throws {
+        let urls = try await model.getDownloadURLStrings()
+        let expected = [
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q3_K_L.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q3_K_M.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q3_K_S.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_0.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_S.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q5_0.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q5_K_M.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q5_K_S.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q6_K.gguf?download=true",
+            "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q8_0.gguf?download=true"
+        ]
+        #assert(urls == expected)
+    }
+    
+    func testGetDownloadURLFromHuggingFaceModel() async throws {
+        let url = try await model.getDownloadURL()!
+        let expected = URL(string: urlString)!
+        #assert(url == expected)
+    }
+    
+    func testInitFromHuggingFaceModel() async throws {
+        let bot = try await LLM(from: model)
+        #assert(!bot.path.isEmpty)
+    }
+    
+    func testInitializerWithTempate() async throws {
+        let template = model.template
+        let bot = try await LLM(from: model)
+        #assert(bot.preProcess(userPrompt, []) == template.preProcess(userPrompt, []))
+    }
+    
+    func testInferenceFromHuggingFaceModel() async throws {
+        let bot = try await LLM(from: model)
+        let input = "have you heard of this so-called LLM.swift library?"
+        await bot.respond(to: input)
+        #assert(!bot.output.isEmpty)
     }
 }

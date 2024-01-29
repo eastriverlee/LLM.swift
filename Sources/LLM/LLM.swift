@@ -119,6 +119,32 @@ open class LLM: ObservableObject {
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
+    } 
+    
+    public convenience init(
+        from huggingFaceModel: HuggingFaceModel,
+        to url: URL = .documentsDirectory,
+        as name: String? = nil,
+        history: [Chat] = [],
+        seed: UInt32 = .random(in: .min ... .max),
+        topK: Int32 = 40,
+        topP: Float = 0.95,
+        temp: Float = 0.8,
+        historyLimit: Int = 8,
+        maxTokenCount: Int32 = 2048
+    ) async throws {
+        let url = try await huggingFaceModel.download(to: url, as: name)
+        self.init(
+            from: url,
+            template: huggingFaceModel.template,
+            history: history,
+            seed: seed,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            historyLimit: historyLimit,
+            maxTokenCount: maxTokenCount
+        )
     }
     
     public convenience init(
@@ -523,4 +549,118 @@ public struct Template {
         stopSequence: "</s>",
         systemPrompt: nil
     )
+}
+
+public enum Quantization: String {
+    case IQ2_XXS
+    case IQ2_XS
+    case Q2_K_S
+    case Q2_K
+    case Q3_K_S
+    case Q3_K_M
+    case Q3_K_L
+    case Q4_K_S
+    case Q4_K_M
+    case Q5_K_S
+    case Q5_K_M
+    case Q6_K
+    case Q8_0
+}
+
+public enum HuggingFaceError: Error {
+    case network(statusCode: Int)
+    case noFilteredURL
+}
+
+public struct HuggingFaceModel {
+    public let name: String
+    public let template: Template
+    public let filterRegexPattern: String
+    
+    public init(_ name: String, template: Template, filterRegexPattern: String) {
+        self.name = name
+        self.template = template
+        self.filterRegexPattern = filterRegexPattern
+    }
+    
+    public init(_ name: String, template: Template, with quantization: Quantization = .Q4_K_M) {
+        self.name = name
+        self.template = template
+        self.filterRegexPattern = "(?i)\(quantization.rawValue)"
+    }
+    
+    package func getDownloadURLStrings() async throws -> [String] {
+        let url = URL(string: "https://huggingface.co/\(name)/tree/main")!
+        let data = try await url.getData()
+        let content = String(data: data, encoding: .utf8)!
+        let downloadURLPattern = #"(?<=href=").*\.gguf\?download=true"#
+        let matches = try! downloadURLPattern.matches(in: content)
+        let root = "https://huggingface.co"
+        return matches.map { match in root + match }
+    }
+
+    package func getDownloadURL() async throws -> URL? {
+        let urlStrings = try await getDownloadURLStrings()
+        for urlString in urlStrings {
+            let found = try filterRegexPattern.hasMatch(in: urlString)
+            if found { return URL(string: urlString)! }
+        }
+        return nil
+    }
+    
+    public func download(to directory: URL = .documentsDirectory, as name: String? = nil) async throws -> URL {
+        var destination: URL
+        if let name {
+            destination = directory.appending(path: name)
+            guard !destination.exists else { return destination }
+        }
+        guard let downloadURL = try await getDownloadURL() else { throw HuggingFaceError.noFilteredURL }
+        destination = directory.appending(path: downloadURL.lastPathComponent)
+        guard !destination.exists else { return destination }
+        let data = try await downloadURL.getData()
+        try data.write(to: destination)
+        return destination
+    }
+    
+    public static func tinyLLaMA(_ systemPrompt: String, with quantization: Quantization = .Q4_K_M) -> HuggingFaceModel {
+        HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", template: .chatML(systemPrompt), with: quantization)
+    }
+}
+
+extension URL {
+    @backDeployed(before: iOS 16)
+    public func appending(path: String) -> URL {
+        appendingPathComponent(path)
+    }
+    @backDeployed(before: iOS 16)
+    public static var documentsDirectory: URL {
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    fileprivate var exists: Bool { FileManager.default.fileExists(atPath: path) }
+    fileprivate func getData() async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(from: self)
+        let statusCode = (response as! HTTPURLResponse).statusCode
+        guard statusCode / 100 == 2 else { throw HuggingFaceError.network(statusCode: statusCode) }
+        return data
+    }
+}
+
+package extension String {
+    func matches(in content: String) throws -> [String] {
+        let pattern = try NSRegularExpression(pattern: self)
+        let range = NSRange(location: 0, length: content.utf16.count)
+        let matches = pattern.matches(in: content, range: range)
+        return matches.map { match in String(content[Range(match.range, in: content)!]) }
+    }
+    func hasMatch(in content: String) throws -> Bool {
+        let pattern = try NSRegularExpression(pattern: self)
+        let range = NSRange(location: 0, length: content.utf16.count)
+        return pattern.firstMatch(in: content, range: range) != nil
+    }
+    func firstMatch(in content: String) throws -> String? {
+        let pattern = try NSRegularExpression(pattern: self)
+        let range = NSRange(location: 0, length: content.utf16.count)
+        guard let match = pattern.firstMatch(in: content, range: range) else { return nil }
+        return String(content[Range(match.range, in: content)!])
+    }
 }
