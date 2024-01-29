@@ -178,7 +178,8 @@ open class LLM: ObservableObject {
     private var currentCount: Int32!
     private var decoded = ""
     
-    private func prepare(from input: consuming String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
+    private func prepare(from input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
+        guard !input.isEmpty else { return false }
         context = .init(model, params)
         var tokens = encode(input)
         var initialCount = tokens.count
