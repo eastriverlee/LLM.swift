@@ -5,7 +5,7 @@
 
 `LLM.swift` is a simple, and readable library which lets you locally interact with LLMs with ease for macOS, iOS, visionOS, watchOS, and tvOS.
 > [!TIP]  
-> sometimes it's a good idea to tinker with `maxTokenCount` parameter for initialization of `LLM`, due to the memory and computation it needs. especially in mobile devices, if you want better speed, lower the number, but if you set it too *(to a point where two turns cannot even fit)* low you will experience quality decrease as context will be cut off. so adjust value according to your needs.
+> sometimes it's a good idea to tinker with `maxTokenCount` parameter for initialization of `LLM`, due to the memory and computation it needs. especially in mobile devices, if you want better speed, lower the number, but if you set it too low—*to a point where two turns cannot even fit*—you will experience quality decrease as context will be cut off. so adjust value according to your usecases.
 
 ## Example
 
