@@ -9,7 +9,7 @@
 
 ## Example
 
-<p align="center"><img src="./Screenshot.png"/></p>
+<p align="center"><img src="./Screenshot.png" width="480"/></p>
 
 > [!NOTE]  
 > this is a minimal SwiftUI example that i did use for testing. mistral 7B based model is working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).
