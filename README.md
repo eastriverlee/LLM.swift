@@ -67,6 +67,7 @@ class Bot: LLM {
         try? await self.init(from: model)
     }
 }
+
 ...
 
 struct ContentView: View {
