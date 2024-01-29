@@ -134,6 +134,7 @@ open class LLM: ObservableObject {
     ) {
         self.init(
             from: url.path,
+            stopSequence: template.stopSequence,
             history: history,
             seed: seed,
             topK: topK,
@@ -142,7 +143,7 @@ open class LLM: ObservableObject {
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
-        self.template = template
+        self.preProcess = template.preProcess
     }
     
     private var shouldContinuePredicting = false
