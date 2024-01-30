@@ -57,7 +57,7 @@ struct ContentView: View {
 }
 ```
 
-### init with HuggingFaceModel directly from internet
+### init with `HuggingFaceModel` (gguf) directly from internet
 
 ```swift
 class Bot: LLM {
