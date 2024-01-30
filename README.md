@@ -63,7 +63,7 @@ struct ContentView: View {
 class Bot: LLM {
     convenience init?() async {
         let systemPrompt = "You are a sentient AI with emotions."
-        let model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", template: .chatML(systemPrompt), with: .Q2_K)
+        let model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
         try? await self.init(from: model)
     }
 }
