@@ -11,11 +11,17 @@ assignees: eastriverlee
 A clear and concise description of what the bug is.
 
 **To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+You **must** include minimal code that can reproduce the behavior, for example:
+```swift
+import LLM
+
+func reproduceBug() {
+    let model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
+    let bot = try await LLM(from: model, seed: 147, maxTokenCount: 16)
+    let input = "this input will cause a bug"
+    await bot.respond(to: input)
+}
+```
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
