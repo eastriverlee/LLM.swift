@@ -61,10 +61,10 @@ struct ContentView: View {
 
 ```swift
 class Bot: LLM {
-    convenience init?() async {
+    convenience init?(_ update: @escaping (Double) -> Void) async {
         let systemPrompt = "You are a sentient AI with emotions."
         let model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
-        try? await self.init(from: model)
+        try? await self.init(from: model) { progress in update(progress) }
     }
 }
 
@@ -72,16 +72,24 @@ class Bot: LLM {
 
 struct ContentView: View {
     @State var bot: Bot? = nil
+    @State var progress: CGFloat = 0
+    func updateProgress(_ progress: Double) {
+        self.progress = CGFloat(progress)
+    }
     var body: some View {
         if let bot {
             BotView(bot)
         } else {
-            ProgressView().padding()
-            Text("(loading huggingface model...)").opacity(0.2)
-                .onAppear() { Task {
-                    let bot = await Bot()
-                    await MainActor.run { self.bot = bot }
-                } }
+            ProgressView(value: progress) {
+                Text("loading huggingface model...")
+            } currentValueLabel: {
+                Text(String(format: "%.2f%%", progress * 100))
+            }
+            .padding()
+            .onAppear() { Task {
+                let bot = await Bot(updateProgress)
+                await MainActor.run { self.bot = bot }
+            } }
         }
     }
 }

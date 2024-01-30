@@ -207,14 +207,14 @@ final class LLMTests: XCTestCase {
     }
     
     func testInferenceFromHuggingFaceModel() async throws {
-        var bot = try await LLM(from: model)
+        let bot = try await LLM(from: model)
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
         #assert(!bot.output.isEmpty)
     }
     
     func testRecoveryFromLengtyInput() async throws {
-        var bot = try await LLM(from: model, maxTokenCount: 16)
+        let bot = try await LLM(from: model, maxTokenCount: 16)
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
         #assert(bot.output == "tl;dr")
