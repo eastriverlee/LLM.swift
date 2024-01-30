@@ -216,7 +216,7 @@ open class LLM: ObservableObject {
         var initialCount = tokens.count
         currentCount = Int32(initialCount)
         if maxTokenCount <= currentCount {
-            while !history.isEmpty {
+            while !history.isEmpty && maxTokenCount <= currentCount {
                 history.removeFirst(min(2, history.count))
                 tokens = encode(preProcess(self.input, history))
                 initialCount = tokens.count
