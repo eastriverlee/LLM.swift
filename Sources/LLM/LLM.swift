@@ -205,6 +205,10 @@ open class LLM: ObservableObject {
     private var currentCount: Int32!
     private var decoded = ""
     
+    open func recoverFromLengthy(_ input: borrowing String, to output:  borrowing AsyncStream<String>.Continuation) {
+        output.yield("tl;dr")
+    }
+    
     private func prepare(from input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
         guard !input.isEmpty else { return false }
         context = .init(model, params)
@@ -212,15 +216,16 @@ open class LLM: ObservableObject {
         var initialCount = tokens.count
         currentCount = Int32(initialCount)
         if maxTokenCount <= currentCount {
-            if history.isEmpty {
-                isFull = true
-                output.yield("Input is too long.")
-                return false
-            } else {
+            while !history.isEmpty {
                 history.removeFirst(min(2, history.count))
                 tokens = encode(preProcess(self.input, history))
                 initialCount = tokens.count
                 currentCount = Int32(initialCount)
+            }
+            if maxTokenCount <= currentCount {
+                isFull = true
+                recoverFromLengthy(input, to: output)
+                return false
             }
         }
         for (i, token) in tokens.enumerated() {
