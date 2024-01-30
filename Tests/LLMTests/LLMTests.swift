@@ -155,7 +155,7 @@ final class LLMTests: XCTestCase {
     }
     
     //MARK: HuggingFaceModel tests
-    lazy var model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", template: .chatML(systemPrompt), with: .Q2_K)
+    lazy var model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
     let urlString = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf?download=true"
     
     func testRegexMatchCaseInsensitivity() async throws {
@@ -207,7 +207,7 @@ final class LLMTests: XCTestCase {
     }
     
     func testInferenceFromHuggingFaceModel() async throws {
-        let bot = try await LLM(from: model)
+        var bot = try await LLM(from: model)
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
         #assert(!bot.output.isEmpty)

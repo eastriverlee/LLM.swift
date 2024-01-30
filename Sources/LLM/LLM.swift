@@ -583,7 +583,7 @@ public struct HuggingFaceModel {
         self.filterRegexPattern = filterRegexPattern
     }
     
-    public init(_ name: String, template: Template, with quantization: Quantization = .Q4_K_M) {
+    public init(_ name: String, _ quantization: Quantization = .Q4_K_M, template: Template) {
         self.name = name
         self.template = template
         self.filterRegexPattern = "(?i)\(quantization.rawValue)"
@@ -622,8 +622,8 @@ public struct HuggingFaceModel {
         return destination
     }
     
-    public static func tinyLLaMA(_ systemPrompt: String, with quantization: Quantization = .Q4_K_M) -> HuggingFaceModel {
-        HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", template: .chatML(systemPrompt), with: quantization)
+    public static func tinyLLaMA(_ quantization: Quantization = .Q4_K_M, _ systemPrompt: String) -> HuggingFaceModel {
+        HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", quantization, template: .chatML(systemPrompt))
     }
 }
 
