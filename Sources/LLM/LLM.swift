@@ -175,6 +175,7 @@ open class LLM: ObservableObject {
             maxTokenCount: maxTokenCount
         )
         self.preProcess = template.preProcess
+        self.template = template
     }
     
     private var shouldContinuePredicting = false
