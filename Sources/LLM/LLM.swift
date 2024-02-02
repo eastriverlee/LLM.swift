@@ -546,7 +546,7 @@ public struct Template {
     
     public static func llama(_ systemPrompt: String? = nil) -> Template {
         return Template(
-            prefix: "<s>[INST] ",
+            prefix: "[INST] ",
             system: ("<<SYS>>\n", "\n<</SYS>>\n\n"),
             user: ("", " [/INST]"),
             bot: (" ", "</s><s>[INST] "),
@@ -557,7 +557,6 @@ public struct Template {
     }
     
     public static let mistral = Template(
-        prefix: "<s>",
         user: ("[INST] ", " [/INST]"),
         bot: ("", "</s> "),
         stopSequence: "</s>",
@@ -672,7 +671,7 @@ extension URL {
             }
             task.resume()
         }
-        let _ = observation
+        _ = observation
         try FileManager.default.moveItem(at: url, to: destination)
     }
 }
