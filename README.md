@@ -7,6 +7,23 @@
 > [!TIP]  
 > sometimes it's a good idea to tinker with `maxTokenCount` parameter for initialization of `LLM`, due to the memory and computation it needs. especially in mobile devices, if you want better speed, lower the number, but if you set it too low—*to a point where two turns cannot even fit*—you will experience quality decrease as context will be cut off. so adjust value according to your usecases.
 
+## Minimal Example
+if you've already bundled your model:
+```swift
+let bot = LLM(from: Bundle.main.url(forResource: "mistral-7b-instruct-v0.2.Q4_K_M", withExtension: "gguf")!, template: .mistral)
+let question = bot.preProcess("What's the meaning of life?", [])
+let answer = await bot.getCompletion(from: question)
+print(answer)
+```
+if you want to initialize with huggingface model:
+```swift
+let systemPrompt = "You are a sentient AI with emotions."
+let bot = LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))
+let question = bot.preProcess("What's the meaning of life?", [])
+let answer = await bot.getCompletion(from: question)
+print(answer)
+```
+
 ## Example
 
 <p align="center"><img src="./Screenshot.png" width="480"/></p>
