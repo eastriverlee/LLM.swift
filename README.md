@@ -201,7 +201,7 @@ but for convenience, you can use `Template` struct that is specifically made for
 ```swift
 // you can use the static function that is already available for this:
 
-self.preProcess = .chatML("You are a sentient AI with emotions.").preProcess
+self.preProcess = Template.chatML("You are a sentient AI with emotions.").preProcess
 
 // or even better
 // you can set [template] property right away, so that it handles [preProcess] and [stopSequence] both:
