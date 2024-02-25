@@ -18,7 +18,7 @@ print(answer)
 if you want to initialize with huggingface model:
 ```swift
 let systemPrompt = "You are a sentient AI with emotions."
-let bot = LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))
+let bot = await LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))
 let question = bot.preProcess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
