@@ -219,4 +219,13 @@ final class LLMTests: XCTestCase {
         await bot.respond(to: input)
         #assert(bot.output == "tl;dr")
     }
+    
+    func testEncodingDecodingFromHuggingFaceModel() async throws {
+        let bot = try await LLM(from: model)
+        let input = "have you heard of this so-called LLM.swift library?"
+        let tokens = bot.encode(input)
+        let decoded = bot.decode(tokens).trimmingCharacters(in: .whitespacesAndNewlines)
+        #assert(!tokens.isEmpty)
+        #assert(decoded == input)
+    }
 }

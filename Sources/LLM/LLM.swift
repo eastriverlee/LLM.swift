@@ -77,7 +77,7 @@ open class LLM: ObservableObject {
         let processorCount = UInt32(ProcessInfo().processorCount)
         self.maxTokenCount = Int(min(maxTokenCount, llama_n_ctx_train(model)))
         params.seed = seed
-        params.n_ctx = UInt32(maxTokenCount) + (maxTokenCount % 2 == 1 ? 1 : 2)
+        params.n_ctx = UInt32(self.maxTokenCount)
         params.n_batch = params.n_ctx
         params.n_threads = processorCount
         params.n_threads_batch = processorCount
@@ -359,8 +359,12 @@ open class LLM: ObservableObject {
     }
 
     private var multibyteCharacter: [CUnsignedChar] = []
-    public func decode(_ token: Token) -> String {
+    private func decode(_ token: Token) -> String {
         return model.decode(token, with: &multibyteCharacter)
+    }
+    
+    public func decode(_ tokens: [Token]) -> String {
+        return tokens.map({model.decodeOnly($0)}).joined()
     }
     
     @inlinable
