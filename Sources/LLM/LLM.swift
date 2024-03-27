@@ -12,18 +12,18 @@ public typealias Chat = (role: Role, content: String)
 open class LLM: ObservableObject {
     public var model: Model
     public var history: [Chat]
-    public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
-    public var postProcess: (_ output: String) -> Void                    = { print($0) }
+    public var preprocess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
+    public var postprocess: (_ output: String) -> Void                    = { print($0) }
     public var update: (_ outputDelta: String?) -> Void                   = { _ in }
     public var template: Template? = nil {
         didSet {
             guard let template else {
-                preProcess = { input, _ in return input }
+                preprocess = { input, _ in return input }
                 stopSequence = nil
                 stopSequenceLength = 0
                 return
             }
-            preProcess = template.preProcess
+            preprocess = template.preprocess
             if let stopSequence = template.stopSequence?.utf8CString {
                 self.stopSequence = stopSequence
                 stopSequenceLength = stopSequence.count - 1
@@ -174,7 +174,7 @@ open class LLM: ObservableObject {
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
-        self.preProcess = template.preProcess
+        self.preprocess = template.preprocess
         self.template = template
     }
     
@@ -224,7 +224,7 @@ open class LLM: ObservableObject {
         if maxTokenCount <= currentCount {
             while !history.isEmpty && maxTokenCount <= currentCount {
                 history.removeFirst(min(2, history.count))
-                tokens = encode(preProcess(self.input, history))
+                tokens = encode(preprocess(self.input, history))
                 initialCount = tokens.count
                 currentCount = Int32(initialCount)
             }
@@ -249,10 +249,10 @@ open class LLM: ObservableObject {
         var input = ""
         if !history.isEmpty {
             history.removeFirst(min(2, history.count))
-            input = preProcess(self.input, history)
+            input = preprocess(self.input, history)
         } else {
             response.scoup(response.count / 3)
-            input = preProcess(self.input, history)
+            input = preprocess(self.input, history)
             input += response.joined()
         }
         let rest = getResponse(from: input)
@@ -332,7 +332,7 @@ open class LLM: ObservableObject {
         guard isAvailable else { return }
         isAvailable = false
         self.input = input
-        let processedInput = preProcess(input, history)
+        let processedInput = preprocess(input, history)
         let response = getResponse(from: processedInput)
         let output = await makeOutputFrom(response)
         history += [(.user, input), (.bot, output)]
@@ -340,7 +340,7 @@ open class LLM: ObservableObject {
         if historyLimit < historyCount {
             history.removeFirst(min(2, historyCount))
         }
-        postProcess(output)
+        postprocess(output)
         isAvailable = true
     }
     
@@ -505,7 +505,7 @@ public struct Template {
         self.shouldDropLast = shouldDropLast
     }
     
-    public var preProcess: (_ input: String, _ history: [Chat]) -> String {
+    public var preprocess: (_ input: String, _ history: [Chat]) -> String {
         return { [self] input, history in
             var processed = prefix
             if let systemPrompt {

@@ -16,7 +16,7 @@ final class LLMTests: XCTestCase {
         <|im_start|>assistant
         
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -30,7 +30,7 @@ final class LLMTests: XCTestCase {
         <|im_start|>assistant
         
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -48,7 +48,7 @@ final class LLMTests: XCTestCase {
         <|im_start|>assistant
         
         """
-        let output = template.preProcess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history)
         #assert(expected == output)
     }
     
@@ -61,7 +61,7 @@ final class LLMTests: XCTestCase {
         ### Response:
         
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -76,7 +76,7 @@ final class LLMTests: XCTestCase {
         ### Response:
         
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -97,7 +97,7 @@ final class LLMTests: XCTestCase {
         ### Response:
         
         """
-        let output = template.preProcess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history)
         #assert(expected == output)
     }
     
@@ -106,7 +106,7 @@ final class LLMTests: XCTestCase {
         let expected = """
         <s>[INST] \(userPrompt) [/INST]
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -119,7 +119,7 @@ final class LLMTests: XCTestCase {
 
         \(userPrompt) [/INST]
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -132,7 +132,7 @@ final class LLMTests: XCTestCase {
 
         \(history[0].content) [/INST] \(history[1].content)</s><s>[INST] \(userPrompt) [/INST]
         """
-        let output = template.preProcess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history)
         #assert(expected == output)
     }
     
@@ -141,7 +141,7 @@ final class LLMTests: XCTestCase {
         let expected = """
         <s>[INST] \(userPrompt) [/INST]
         """
-        let output = template.preProcess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
     }
     
@@ -150,7 +150,7 @@ final class LLMTests: XCTestCase {
         let expected = """
         <s>[INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
         """
-        let output = template.preProcess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history)
         #assert(expected == output)
     }
     
@@ -203,7 +203,7 @@ final class LLMTests: XCTestCase {
     func testInitializerWithTempate() async throws {
         let template = model.template
         let bot = try await LLM(from: model)
-        #assert(bot.preProcess(userPrompt, []) == template.preProcess(userPrompt, []))
+        #assert(bot.preprocess(userPrompt, []) == template.preprocess(userPrompt, []))
     }
     
     func testInferenceFromHuggingFaceModel() async throws {

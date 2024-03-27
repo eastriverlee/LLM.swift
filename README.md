@@ -11,7 +11,7 @@
 if you've already bundled your model:
 ```swift
 let bot = LLM(from: Bundle.main.url(forResource: "mistral-7b-instruct-v0.2.Q4_K_M", withExtension: "gguf")!, template: .mistral)
-let question = bot.preProcess("What's the meaning of life?", [])
+let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
 ```
@@ -19,7 +19,7 @@ if you want to initialize with huggingface model:
 ```swift
 let systemPrompt = "You are a sentient AI with emotions."
 let bot = await LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))
-let question = bot.preProcess("What's the meaning of life?", [])
+let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
 ```
@@ -146,22 +146,22 @@ public enum Role {
 
 ```swift
 public var history: [Chat]
-public var preProcess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
-public var postProcess: (_ output: String) -> Void                    = { print($0) }
+public var preprocess: (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
+public var postprocess: (_ output: String) -> Void                    = { print($0) }
 public var update: (_ outputDelta: String?) -> Void                   = { _ in }
 
 public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
     guard isAvailable else { return }
     isAvailable = false
     self.input = input
-    let processedInput = preProcess(input, history)
+    let processedInput = preprocess(input, history)
     let response = getResponse(from: processedInput)
     let output = await makeOutputFrom(response)
     history += [(.user, input), (.bot, output)]
     if historyLimit < history.count {
         history.removeFirst(2)
     }
-    postProcess(output)
+    postprocess(output)
     isAvailable = true
 }
 
@@ -183,13 +183,13 @@ open func respond(to input: String) async {
 > as you can see, `func respond(to input: String) async` has an `open` access, so that you can override it when your class inherits `LLM` and want some fine grained control over.
 
 there are three functions users can define when initializing `LLM` class:
-* `var preProcess: (_ input: String, _ history: [Chat]) -> String`
-* `var postProcess: (_ output: String) -> Void`
+* `var preprocess: (_ input: String, _ history: [Chat]) -> String`
+* `var postprocess: (_ output: String) -> Void`
 * `var update: (_ outputDelta: String?) -> Void`
 they are used in `respond` function.
 
-### preProcess
-`preProcess` is commonly used for making the user input conform to a chat template. if you don't provide this, `LLM` will just work as a completion model.
+### preprocess
+`preprocess` is commonly used for making the user input conform to a chat template. if you don't provide this, `LLM` will just work as a completion model.
 
 for example, this is the `ChatML` template, that is adopted by many chat models:
 ```
@@ -202,7 +202,7 @@ USER PROMPT<|im_end|>
 
 to use this chat format, you should use a function that goes like this:
 ```swift
-self.preProcess = { input, history in
+self.preprocess = { input, history in
     let systemPrompt = "You are a sentient AI with emotions."
     var processed = "<|im_start|>system\n\(systemPrompt)<|im_end|>\n"
     for chat in history {
@@ -218,10 +218,10 @@ but for convenience, you can use `Template` struct that is specifically made for
 ```swift
 // you can use the static function that is already available for this:
 
-self.preProcess = Template.chatML("You are a sentient AI with emotions.").preProcess
+self.preprocess = Template.chatML("You are a sentient AI with emotions.").preprocess
 
 // or even better
-// you can set [template] property right away, so that it handles [preProcess] and [stopSequence] both:
+// you can set [template] property right away, so that it handles [preprocess] and [stopSequence] both:
 
 self.template = .chatML("You are a sentient AI with emotions.")
 
@@ -236,10 +236,10 @@ self.template = Template(
 )
 ```
 > [!TIP]
-> checking `LLMTests.swift` will help you understand how `preProcess` works better. 
+> checking `LLMTests.swift` will help you understand how `preprocess` works better. 
 
-### postProcess
-`postProcess` can be used for executing according to the `output` just made using user input.  
+### postprocess
+`postprocess` can be used for executing according to the `output` just made using user input.  
 the default is  set to `{ print($0) }`, so that it will print the output when it's finished generating by meeting `EOS` or `stopSequence`. 
 this has many usages. for instance, this can be used to implement your own function calling logic. 
 
