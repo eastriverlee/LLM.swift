@@ -570,6 +570,7 @@ public struct Template {
 
 public enum Quantization: String {
     case IQ1_S
+    case IQ1_M
     case IQ2_XXS
     case IQ2_XS
     case IQ2_S
