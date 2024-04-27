@@ -3,7 +3,7 @@
 [![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Feastriverlee%2FLLM.swift%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/eastriverlee/LLM.swift)
 [![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Feastriverlee%2FLLM.swift%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/eastriverlee/LLM.swift)
 
-`LLM.swift` is a simple, and readable library which lets you locally interact with LLMs with ease for macOS, iOS, visionOS, watchOS, and tvOS.
+`LLM.swift` is a simple and readable library that allows you to interact with large language models (LLMs) locally with ease for macOS, iOS, watchOS, tvOS, and visionOS.
 > [!TIP]  
 > sometimes it's a good idea to tinker with `maxTokenCount` parameter for initialization of `LLM`, due to the memory and computation it needs. especially in mobile devices, if you want better speed, lower the number, but if you set it too low—*to a point where two turns cannot even fit*—you will experience quality decrease as context will be cut off. so adjust value according to your usecases.
 
