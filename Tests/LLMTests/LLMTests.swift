@@ -104,7 +104,7 @@ final class LLMTests: XCTestCase {
     func testLLaMaPreProcessorWithoutSystemMessage() throws {
         let template = Template.llama()
         let expected = """
-        <s>[INST] \(userPrompt) [/INST]
+        [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
@@ -113,7 +113,7 @@ final class LLMTests: XCTestCase {
     func testLLaMaPreProcessorWithoutHistory() throws {
         let template = Template.llama(systemPrompt)
         let expected = """
-        <s>[INST] <<SYS>>
+        [INST] <<SYS>>
         \(systemPrompt)
         <</SYS>>
 
@@ -126,7 +126,7 @@ final class LLMTests: XCTestCase {
     func testLLaMaPreProcessorWithHistory() throws {
         let template = Template.llama(systemPrompt)
         let expected = """
-        <s>[INST] <<SYS>>
+        [INST] <<SYS>>
         \(systemPrompt)
         <</SYS>>
 
@@ -139,7 +139,7 @@ final class LLMTests: XCTestCase {
     func testMistralPreProcessorWithoutHistory() throws {
         let template = Template.mistral
         let expected = """
-        <s>[INST] \(userPrompt) [/INST]
+        [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, [])
         #assert(expected == output)
@@ -148,7 +148,7 @@ final class LLMTests: XCTestCase {
     func testMistralPreProcessorWithHistory() throws {
         let template = Template.mistral
         let expected = """
-        <s>[INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
+        [INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, history)
         #assert(expected == output)
