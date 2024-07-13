@@ -32,7 +32,7 @@ print(answer)
 > this is a minimal SwiftUI example that i did use for testing. mistral 7B based model is working on iPad Air 5th gen(Q5_K_M) and iPhone 12 mini(Q2_K).  
 > however, generally speaking, for mobile devices, 3B >= parameter models are recommended. check this [benchmark](https://github.com/ggerganov/llama.cpp/discussions/4508) for more details.
 
-### init with from model file that you bundled in your project
+### init with a model file that you bundled in your project
 ```swift
 import SwiftUI
 import LLM
@@ -74,7 +74,7 @@ struct ContentView: View {
 }
 ```
 
-### init with `HuggingFaceModel` (gguf) directly from internet
+### init with a `HuggingFaceModel` (gguf) directly from internet
 
 ```swift
 class Bot: LLM {
