@@ -379,10 +379,10 @@ extension Model {
     
     public func shouldAddBOS() -> Bool {
         let addBOS = llama_add_bos_token(self);
-        guard addBOS != -1 else {
+        guard !addBOS else {
             return llama_vocab_type(self) == LLAMA_VOCAB_TYPE_SPM
         }
-        return addBOS != 0
+        return addBOS
     }
     
     public func decodeOnly(_ token: Token) -> String {
