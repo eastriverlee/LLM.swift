@@ -20,8 +20,8 @@ jobs:
         
       - name: Pinning SPM
         run: |
-          export FROM='"https://github.com/ggerganov/llama.cpp/", branch: "master"'
-          export TO='"https://github.com/ggerganov/llama.cpp/", revision: "${{ env.LLAMA_COMMIT_HASH }}"'
+          export FROM='"https://github.com/ggerganov/llama.cpp", branch: "master"'
+          export TO='"https://github.com/ggerganov/llama.cpp", revision: "${{ env.LLAMA_COMMIT_HASH }}"'
           sed -i -e "s|$FROM|$TO|" Package.swift
       
       - name: Push changes to pinned branch
