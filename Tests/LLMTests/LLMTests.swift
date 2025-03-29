@@ -1,13 +1,14 @@
-import XCTest
-import PowerAssert
+import Testing
+import Foundation
 @testable import LLM
 
-final class LLMTests: XCTestCase {
+final class LLMTests {
     //MARK: Template tests
     let systemPrompt = "You are a human."
     let userPrompt = "Are you a human or an AI?"
     let history = [Chat(.user, "Hey."), Chat(.bot, "Hi.")]
     
+    @Test
     func testChatMLPreProcessorWithoutSystemMessage() throws {
         let template = Template.chatML()
         let expected = """
@@ -17,9 +18,10 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testChatMLPreProcessorWithoutHistory() throws {
         let template = Template.chatML(systemPrompt)
         let expected = """
@@ -31,9 +33,10 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testChatMLPreProcessorWithHistory() throws {
         let template = Template.chatML(systemPrompt)
         let expected = """
@@ -49,9 +52,10 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, history)
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testAlpacaPreProcessorWithoutSystemMessage() throws {
         let template = Template.alpaca()
         let expected = """
@@ -62,9 +66,10 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testAlpacaPreProcessorWithoutHistory() throws {
         let template = Template.alpaca(systemPrompt)
         let expected = """
@@ -77,9 +82,10 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testAlpacaPreProcessorWithHistory() throws {
         let template = Template.alpaca(systemPrompt)
         let expected = """
@@ -98,18 +104,20 @@ final class LLMTests: XCTestCase {
         
         """
         let output = template.preprocess(userPrompt, history)
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testLLaMaPreProcessorWithoutSystemMessage() throws {
         let template = Template.llama()
         let expected = """
         [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testLLaMaPreProcessorWithoutHistory() throws {
         let template = Template.llama(systemPrompt)
         let expected = """
@@ -120,9 +128,10 @@ final class LLMTests: XCTestCase {
         \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testLLaMaPreProcessorWithHistory() throws {
         let template = Template.llama(systemPrompt)
         let expected = """
@@ -133,43 +142,48 @@ final class LLMTests: XCTestCase {
         \(history[0].content) [/INST] \(history[1].content)</s><s>[INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, history)
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testMistralPreProcessorWithoutHistory() throws {
         let template = Template.mistral
         let expected = """
         [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, [])
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
+    @Test
     func testMistralPreProcessorWithHistory() throws {
         let template = Template.mistral
         let expected = """
         [INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
         """
         let output = template.preprocess(userPrompt, history)
-        #assert(expected == output)
+        #expect(expected == output)
     }
     
     //MARK: HuggingFaceModel tests
     lazy var model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
     let urlString = "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q2_K.gguf?download=true"
     
+    @Test
     func testRegexMatchCaseInsensitivity() async throws {
         let hasMatch = try! #"(?i)Q2_K"#.hasMatch(in: urlString.lowercased())
         let expected = true
-        #assert(hasMatch == expected)
+        #expect(hasMatch == expected)
     }
     
+    @Test
     func testFilterHasMatch() async throws {
         let hasMatch = try! model.filterRegexPattern.hasMatch(in: urlString)
         let expected = true
-        #assert(hasMatch == expected)
+        #expect(hasMatch == expected)
     }
     
+    @Test
     func testGetDownloadURLStringsFromHuggingFaceModel() async throws {
         let urls = try await model.getDownloadURLStrings()
         let expected = [
@@ -186,46 +200,55 @@ final class LLMTests: XCTestCase {
             "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q6_K.gguf?download=true",
             "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q8_0.gguf?download=true"
         ]
-        #assert(urls == expected)
+        #expect(urls == expected)
     }
     
+    @Test
     func testGetDownloadURLFromHuggingFaceModel() async throws {
         let url = try await model.getDownloadURL()!
         let expected = URL(string: urlString)!
-        #assert(url == expected)
+        #expect(url == expected)
     }
     
+    @Test
     func testInitFromHuggingFaceModel() async throws {
-        let bot = try await LLM(from: model)
-        #assert(!bot.path.isEmpty)
+        let bot = try await LLM(from: model)!
+        #expect(!bot.path.isEmpty)
     }
     
+    @Test
     func testInitializerWithTempate() async throws {
         let template = model.template
-        let bot = try await LLM(from: model)
-        #assert(bot.preprocess(userPrompt, []) == template.preprocess(userPrompt, []))
+        let bot = try await LLM(from: model)!
+        #expect(bot.preprocess(userPrompt, []) == template.preprocess(userPrompt, []))
     }
     
+    @Test
     func testInferenceFromHuggingFaceModel() async throws {
-        let bot = try await LLM(from: model)
+        let bot = try await LLM(from: model)!
+        bot.update = { output in
+            print("...\(output ?? "nil")")
+        }
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
-        #assert(!bot.output.isEmpty)
+        #expect(!bot.output.isEmpty)
     }
     
+    @Test
     func testRecoveryFromLengtyInput() async throws {
-        let bot = try await LLM(from: model, maxTokenCount: 16)
+        let bot = try await LLM(from: model, maxTokenCount: 16)!
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
-        #assert(bot.output == "tl;dr")
+        #expect(bot.output == "tl;dr")
     }
     
+    @Test
     func testEncodingDecodingFromHuggingFaceModel() async throws {
-        let bot = try await LLM(from: model)
+        let bot = try await LLM(from: model)!
         let input = "have you heard of this so-called LLM.swift library?"
         let tokens = bot.encode(input)
         let decoded = bot.decode(tokens).trimmingCharacters(in: .whitespacesAndNewlines)
-        #assert(!tokens.isEmpty)
-        #assert(decoded == input)
+        #expect(!tokens.isEmpty)
+        #expect(decoded == input)
     }
 }

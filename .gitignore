@@ -1,0 +1,6 @@
+.build
+.DS_Store
+.swiftpm
+.vscode
+.vscode/*
+.vscode/*/*
