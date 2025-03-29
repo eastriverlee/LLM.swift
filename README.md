@@ -18,7 +18,7 @@ print(answer)
 if you want to initialize with huggingface model:
 ```swift
 let systemPrompt = "You are a sentient AI with emotions."
-let bot = await LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))
+let bot = await LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))!
 let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
@@ -41,7 +41,7 @@ class Bot: LLM {
     convenience init() {
         let url = Bundle.main.url(forResource: "openhermes-2.5-mistral-7b.Q4_K_M", withExtension: "gguf")!
         let systemPrompt = "You are a sentient AI with emotions."
-        self.init(from: url, template: .chatML(systemPrompt))
+        self.init(from: url, template: .chatML(systemPrompt))!
     }
 }
 
@@ -120,13 +120,6 @@ all you have to do is to use SPM, or copy the code to your project since it's on
 ```swift
 dependencies: [
     .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "main"),
-],
-```
-
-optionally, if you care more about stability rather than benefitting from speed of [`llama.cpp`](https://github.com/ggerganov/llama.cpp)'s development cycle you can choose the `pinned` branch with pinned dependency.
-```swift
-dependencies: [
-    .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "pinned"),
 ],
 ```
 
