@@ -7,10 +7,6 @@ public typealias Model = OpaquePointer
 public typealias Vocab = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
-@globalActor public actor InferenceActor {
-    static public let shared = InferenceActor()
-}
-
 open class LLM: ObservableObject {
     public var model: Model
     public var history: [Chat]
@@ -185,7 +181,6 @@ open class LLM: ObservableObject {
         llama_model_free(model)
     }
     
-    @InferenceActor
     private func predictNextToken() async -> Token {
         guard shouldContinuePredicting else { return endToken }
         let samplerParams = llama_sampler_chain_default_params()
@@ -245,9 +240,7 @@ open class LLM: ObservableObject {
         return true
     }
     
-    @InferenceActor
     private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
-        multibyteCharacter.removeAll()
         var input = ""
         if !history.isEmpty {
             history.removeFirst(min(2, history.count))
@@ -263,9 +256,7 @@ open class LLM: ObservableObject {
         }
     }
     
-    @InferenceActor
     private func process(_ token: Token, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
-        @InferenceActor
         struct saved {
             static var stopSequenceEndIndex = 0
             static var letters: [CChar] = []
@@ -300,7 +291,6 @@ open class LLM: ObservableObject {
         return true
     }
     
-    @InferenceActor
     private func getResponse(from input: String) -> AsyncStream<String> {
         .init { output in Task {
             defer { context = nil }
@@ -308,7 +298,8 @@ open class LLM: ObservableObject {
             var response: [String] = []
             while currentCount < maxTokenCount {
                 let token = await predictNextToken()
-                if !process(token, to: output) { return output.finish() }
+                let shouldContinue = process(token, to: output)
+                if !shouldContinue { return output.finish() }
                 currentCount += 1
             }
             await finishResponse(from: &response, to: output)
@@ -319,7 +310,6 @@ open class LLM: ObservableObject {
     private var input: String = ""
     private var isAvailable = true
     
-    @InferenceActor
     public func getCompletion(from input: borrowing String) async -> String {
         guard isAvailable else { fatalError("LLM is being used") }
         isAvailable = false
@@ -332,8 +322,7 @@ open class LLM: ObservableObject {
         return output
     }
     
-    @InferenceActor
-    public func respond(to input: String, with makeOutputFrom: @InferenceActor @escaping (AsyncStream<String>) async -> String) async {
+    public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
         isAvailable = false
         self.input = input
@@ -363,38 +352,20 @@ open class LLM: ObservableObject {
         }
     }
 
-    private var multibyteCharacter: [CUnsignedChar] = []
     private func decode(_ token: Token) -> String {
-        return decode(token, with: &multibyteCharacter)
-    }
-    
-    public func decode(_ tokens: [Token]) -> String {
-        return tokens.map({decodeOnly($0)}).joined()
-    }
-    
-    private func decodeOnly(_ token: Token) -> String {
-        var nothing: [CUnsignedChar] = []
-        return decode(token, with: &nothing)
-    }
-    
-    private func decode(_ token: Token, with multibyteCharacter: inout [CUnsignedChar]) -> String {
         var bufferLength = 16
         var buffer: [CChar] = .init(repeating: 0, count: bufferLength)
-        let actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
-        guard 0 != actualLength else { return "" }
+        var actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
+        guard actualLength != 0 else { return "" }
         if actualLength < 0 {
-            bufferLength = actualLength * -1
+            bufferLength = -actualLength
             buffer = .init(repeating: 0, count: bufferLength)
-            llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false)
+            actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
         } else {
-            buffer.removeLast(bufferLength - actualLength)
+            buffer = Array(buffer.prefix(actualLength))
         }
-        if multibyteCharacter.isEmpty, let decoded = String(cString: buffer + [0], encoding: .utf8) {
-            return decoded
-        }
-        multibyteCharacter.append(contentsOf: buffer.map { CUnsignedChar(bitPattern: $0) })
-        guard let decoded = String(data: .init(multibyteCharacter), encoding: .utf8) else { return "" }
-        multibyteCharacter.removeAll(keepingCapacity: true)
+        let bytes = buffer.map { UInt8(bitPattern: $0) }
+        guard let decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
         return decoded
     }
 
