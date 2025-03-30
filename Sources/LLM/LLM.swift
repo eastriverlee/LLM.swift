@@ -528,6 +528,13 @@ public struct Template: Sendable {
         stopSequence: "</s>",
         systemPrompt: nil
     )
+
+    public static let gemma = Template(
+        user: ("<start_of_turn>user", "<end_of_turn>"),
+        bot: ("<start_of_turn>model", "<end_of_turn>"),
+        stopSequence: "<end_of_turn>",
+        systemPrompt: nil
+    )
 }
 
 public enum Quantization: String {
