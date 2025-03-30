@@ -49,8 +49,9 @@ open class LLM: ObservableObject {
     private let vocab: OpaquePointer!
     private let maxTokenCount: Int
     private let totalTokenCount: Int
-    private var newlineToken: Token { vocab.newLineToken }
-    private var endToken: Token { vocab.endToken }
+    private lazy var newlineToken: Token = vocab.newLineToken
+    private lazy var endToken: Token = vocab.endToken
+    private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
     private var stopSequence: ContiguousArray<CChar>?
     private var stopSequenceLength: Int
     private var params: llama_context_params
@@ -216,6 +217,7 @@ open class LLM: ObservableObject {
         guard !input.isEmpty else { return false }
         context = .init(model, params)
         var tokens = encode(input)
+        if tokens.last == nullToken { tokens.removeLast() }
         var initialCount = tokens.count
         currentCount = Int32(initialCount)
         if maxTokenCount <= currentCount {
@@ -373,7 +375,7 @@ open class LLM: ObservableObject {
         let count = Int32(text.cString(using: .utf8)!.count)
         var tokenCount = count + 1
         let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount)); defer { cTokens.deallocate() }
-        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, false)
+        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, true)
         let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
         return tokens
     }
@@ -432,6 +434,7 @@ extension Token {
         case couldBeEnd
         case normal
     }
+    func text(from vocab: Vocab) -> String { String(cString: llama_token_get_text(vocab, self)) }
 }
 
 public enum Role {
@@ -530,8 +533,8 @@ public struct Template: Sendable {
     )
 
     public static let gemma = Template(
-        user: ("<start_of_turn>user", "<end_of_turn>"),
-        bot: ("<start_of_turn>model", "<end_of_turn>"),
+        user: ("<start_of_turn>user\n", "<end_of_turn>\n"),
+        bot: ("<start_of_turn>model\n", "<end_of_turn>\n"),
         stopSequence: "<end_of_turn>",
         systemPrompt: nil
     )
