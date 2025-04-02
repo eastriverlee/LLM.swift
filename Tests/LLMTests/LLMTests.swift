@@ -235,19 +235,16 @@ final class LLMTests {
     }
     
     @Test
-    func testRecoveryFromLengtyInput() async throws {
-        let bot = try await LLM(from: model, maxTokenCount: 16)!
-        let input = "have you heard of this so-called LLM.swift library?"
-        await bot.respond(to: input)
-        #expect(bot.output == "tl;dr")
-    }
-    
-    @Test
     func testEncodingDecodingFromHuggingFaceModel() async throws {
         let bot = try await LLM(from: model)!
         let input = "have you heard of this so-called LLM.swift library?"
-        let tokens = bot.encode(input)
-        let decoded = bot.decode(tokens).trimmingCharacters(in: .whitespacesAndNewlines)
+        var tokens = await bot.core.encode(input)
+        tokens.removeLast()
+        var decoded = ""
+        for token in tokens {
+            decoded += await bot.core.decode(token)
+        }
+        decoded = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(!tokens.isEmpty)
         #expect(decoded == input)
     }

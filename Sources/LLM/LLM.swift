@@ -7,56 +7,276 @@ public typealias Model = OpaquePointer
 public typealias Vocab = OpaquePointer
 public typealias Chat = (role: Role, content: String)
 
+public actor LLMCore {
+    private let model: Model
+    private let vocab: Vocab
+    private var context: OpaquePointer
+    private var batch: llama_batch
+    private let params: llama_context_params
+    
+    private(set) var seed: UInt32
+    private(set) var topK: Int32
+    private(set) var topP: Float
+    private(set) var temp: Float
+    
+    private let maxTokenCount: Int
+    private let totalTokenCount: Int
+    private lazy var newlineToken: Token = llama_vocab_nl(vocab)
+    private lazy var endToken: Token = llama_vocab_eos(vocab)
+    private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
+    
+    private var stopSequenceTokens: [Token]?
+    private var tokenBuffer: [Token] = []
+    private let tokenDecodeCache = NSCache<NSNumber, NSString>()
+    
+    private var shouldContinuePredicting = false
+    private var currentTokenCount: Int32 = 0
+    
+    func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil) {
+        if let seed { self.seed = seed }
+        if let topK { self.topK = topK }
+        if let topP { self.topP = topP }
+        if let temp { self.temp = temp }
+    }
+    
+    func setStopSequence(_ sequence: String?) {
+        if let sequence {
+            stopSequenceTokens = encode(sequence, shouldAddBOS: false)
+        } else {
+            stopSequenceTokens = nil
+        }
+    }
+    
+    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, maxTokenCount: Int) throws {
+        self.model = model
+        self.vocab = llama_model_get_vocab(model)
+        self.seed = seed
+        self.topK = topK
+        self.topP = topP
+        self.temp = temp
+        self.maxTokenCount = maxTokenCount
+        self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
+        
+        var contextParams = llama_context_default_params()
+        let processorCount = Int32(ProcessInfo().processorCount)
+        contextParams.n_ctx = UInt32(maxTokenCount)
+        contextParams.n_batch = contextParams.n_ctx
+        contextParams.n_threads = processorCount
+        contextParams.n_threads_batch = processorCount
+        self.params = contextParams
+        
+        guard let context = llama_init_from_model(model, params) else {
+            throw LLMError.contextCreationFailed
+        }
+        self.context = context
+        
+        self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
+    }
+    
+    deinit {
+        llama_batch_free(batch)
+        llama_free(context)
+    }
+    
+    
+    public func encode(_ text: String, shouldAddBOS: Bool = true) -> [Token] {
+        let count = Int32(text.cString(using: .utf8)!.count)
+        var tokenCount = count + 1
+        let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount))
+        defer { cTokens.deallocate() }
+        
+        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, true)
+        let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
+        return tokens
+    }
+    
+    public func decode(_ token: Token) -> String {
+        if let cached = tokenDecodeCache.object(forKey: NSNumber(value: token)) {
+            return cached as String
+        }
+        
+        var bufferLength = 16
+        var buffer: [CChar] = .init(repeating: 0, count: bufferLength)
+        var actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
+        
+        guard actualLength != 0 else { return "" }
+        
+        if actualLength < 0 {
+            bufferLength = -actualLength
+            buffer = .init(repeating: 0, count: bufferLength)
+            actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
+        } else {
+            buffer = Array(buffer.prefix(actualLength))
+        }
+        
+        let bytes = buffer.map { UInt8(bitPattern: $0) }
+        guard let decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
+        
+        tokenDecodeCache.setObject(decoded as NSString, forKey: NSNumber(value: token))
+        
+        return decoded
+    }
+    
+    
+    func prepareContext(for input: String) -> Bool {
+        guard !input.isEmpty else { return false }
+        
+        tokenBuffer.removeAll()
+        
+        var tokens = encode(input)
+        if tokens.last == nullToken { tokens.removeLast() }
+        
+        let initialCount = tokens.count
+        guard maxTokenCount > initialCount else { return false }
+        
+        clearBatch()
+        for (i, token) in tokens.enumerated() {
+            addToBatch(token: token, pos: Int32(i), isLogit: i == initialCount - 1)
+        }
+        guard llama_decode(context, batch) == 0 else { return false }
+        
+        currentTokenCount = Int32(initialCount)
+        shouldContinuePredicting = true
+        return true
+    }
+    
+    private func clearBatch() {
+        batch.n_tokens = 0
+    }
+    
+    private func addToBatch(token: Token, pos: Int32, isLogit: Bool = true) {
+        let i = Int(batch.n_tokens)
+        batch.token[i] = token
+        batch.pos[i] = pos
+        batch.n_seq_id[i] = 1
+        if let seq_id = batch.seq_id[i] {
+            seq_id[0] = 0
+        }
+        batch.logits[i] = isLogit ? 1 : 0
+        batch.n_tokens += 1
+    }
+    
+    func predictNextToken() -> Token {
+        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else { 
+            return endToken 
+        }
+        
+        let samplerParams = llama_sampler_chain_default_params()
+        let sampler = llama_sampler_chain_init(samplerParams)
+        defer { llama_sampler_free(sampler) }
+        
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
+        
+        let i = batch.n_tokens - 1
+        let token = llama_sampler_sample(sampler, context, i)
+        
+        tokenBuffer.append(token)
+        
+        if let stopTokens = stopSequenceTokens, stopTokens.count <= tokenBuffer.count {
+            let startIdx = tokenBuffer.count - stopTokens.count
+            let bufferSlice = tokenBuffer[startIdx..<tokenBuffer.count]
+            if Array(bufferSlice) == stopTokens {
+                shouldContinuePredicting = false
+                return endToken
+            }
+        }
+        
+        clearBatch()
+        addToBatch(token: token, pos: currentTokenCount)
+        
+        if llama_decode(context, batch) != 0 {
+            shouldContinuePredicting = false
+            return endToken
+        }
+        
+        currentTokenCount += 1
+        return token
+    }
+    
+    func stopGeneration() {
+        shouldContinuePredicting = false
+    }
+    
+    func generateResponseStream(from input: String) -> AsyncStream<String> {
+        return AsyncStream<String> { continuation in
+            Task {
+                guard prepareContext(for: input) else { return continuation.finish() }
+                while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+                    let token = predictNextToken()
+                    guard token != endToken else { return continuation.finish() }
+                    let word = decode(token)
+                    continuation.yield(word)
+                }
+                continuation.finish()
+            }
+        }
+    }
+}
+
+public enum LLMError: Error {
+    case modelLoadFailed
+    case contextCreationFailed
+    case tokenizationFailed
+    case decodingFailed
+    case inputTooLong
+    case decodeFailed
+}
+
 open class LLM: ObservableObject {
-    public var model: Model
+    private(set) var model: Model
     public var history: [Chat]
     public var preprocess: @Sendable (_ input: String, _ history: [Chat]) -> String = { input, _ in return input }
     public var postprocess: @Sendable (_ output: String) -> Void = { print($0) }
     public var update: @Sendable (_ outputDelta: String?) -> Void = { _ in }
+    
+    @Published public private(set) var output = ""
+    
     public var template: Template? = nil {
         didSet {
             guard let template else {
                 preprocess = { input, _ in return input }
-                stopSequence = nil
-                stopSequenceLength = 0
+                Task { await core.setStopSequence(nil) }
                 return
             }
             preprocess = template.preprocess
-            if let stopSequence = template.stopSequence?.utf8CString {
-                self.stopSequence = stopSequence
-                stopSequenceLength = stopSequence.count - 1
-            } else {
-                stopSequence = nil
-                stopSequenceLength = 0
-            }
+            Task { await core.setStopSequence(template.stopSequence) }
         }
     }
     
-    public var seed: UInt32
-    public var topK: Int32
-    public var topP: Float
-    public var temp: Float
+    public var seed: UInt32 {
+        didSet {
+            Task { await core.setParameters(seed: seed) }
+        }
+    }
+    
+    public var topK: Int32 {
+        didSet {
+            Task { await core.setParameters(topK: topK) }
+        }
+    }
+    
+    public var topP: Float {
+        didSet {
+            Task { await core.setParameters(topP: topP) }
+        }
+    }
+    
+    public var temp: Float {
+        didSet {
+            Task { await core.setParameters(temp: temp) }
+        }
+    }
+    
     public var historyLimit: Int
     public var path: [CChar]
     
-    @Published public private(set) var output = ""
-    @MainActor public func setOutput(to newOutput: consuming String) {
-        output = newOutput
-    }
+    public let core: LLMCore
+    private var isAvailable = true
+    private var input: String = ""
     
-    private var context: Context!
-    private var batch: llama_batch!
-    private let vocab: OpaquePointer!
-    private let maxTokenCount: Int
-    private let totalTokenCount: Int
-    private lazy var newlineToken: Token = vocab.newLineToken
-    private lazy var endToken: Token = vocab.endToken
-    private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
-    private var stopSequence: ContiguousArray<CChar>?
-    private var stopSequenceLength: Int
-    private var params: llama_context_params
-    private var isFull = false
-    private var updateProgress: (Double) -> Void = { _ in }
     
     public init?(
         from path: String,
@@ -70,33 +290,46 @@ open class LLM: ObservableObject {
         maxTokenCount: Int32 = 2048
     ) {
         self.path = path.cString(using: .utf8)!
-        var modelParams = llama_model_default_params()
-#if targetEnvironment(simulator)
-        modelParams.n_gpu_layers = 0
-#endif
-        let model = llama_model_load_from_file(self.path, modelParams)
-        guard let model else { return nil }
-        self.params = llama_context_default_params()
-        let processorCount = Int32(ProcessInfo().processorCount)
-        self.maxTokenCount = Int(min(maxTokenCount, llama_model_n_ctx_train(model)))
-        params.n_ctx = UInt32(self.maxTokenCount)
-        params.n_batch = params.n_ctx
-        params.n_threads = processorCount
-        params.n_threads_batch = processorCount
         self.seed = seed
         self.topK = topK
         self.topP = topP
         self.temp = temp
         self.historyLimit = historyLimit
-        self.model = model
         self.history = history
-        self.vocab = llama_model_get_vocab(model)
-        self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
-        self.stopSequence = stopSequence?.utf8CString
-        self.stopSequenceLength = (self.stopSequence?.count ?? 1) - 1
-        self.batch = llama_batch_init(Int32(self.maxTokenCount), 0, 1)
+        
+        var modelParams = llama_model_default_params()
+#if targetEnvironment(simulator)
+        modelParams.n_gpu_layers = 0
+#endif
+        guard let model = llama_model_load_from_file(self.path, modelParams) else {
+            return nil
+        }
+        self.model = model
+        
+        let finalMaxTokenCount = Int(min(maxTokenCount, llama_model_n_ctx_train(model)))
+        
+        do {
+            self.core = try LLMCore(
+                model: model,
+                path: self.path,
+                seed: seed,
+                topK: topK,
+                topP: topP,
+                temp: temp,
+                maxTokenCount: finalMaxTokenCount
+            )
+            
+            if let stopSequence {
+                Task {
+                    await core.setStopSequence(stopSequence)
+                }
+            }
+        } catch {
+            llama_model_free(model)
+            return nil
+        }
     }
-
+    
     public convenience init?(
         from url: URL,
         stopSequence: String? = nil,
@@ -119,36 +352,6 @@ open class LLM: ObservableObject {
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
-    } 
-    
-    public convenience init?(
-        from huggingFaceModel: HuggingFaceModel,
-        to url: URL = .documentsDirectory,
-        as name: String? = nil,
-        history: [Chat] = [],
-        seed: UInt32 = .random(in: .min ... .max),
-        topK: Int32 = 40,
-        topP: Float = 0.95,
-        temp: Float = 0.8,
-        historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048,
-        updateProgress: @Sendable @escaping (Double) -> Void = { print(String(format: "downloaded(%.2f%%)", $0 * 100)) }
-    ) async throws {
-        let url = try await huggingFaceModel.download(to: url, as: name) { progress in
-            Task { @MainActor in updateProgress(progress) }
-        }
-        self.init(
-            from: url,
-            template: huggingFaceModel.template,
-            history: history,
-            seed: seed,
-            topK: topK,
-            topP: topP,
-            temp: temp,
-            historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount
-        )
-        self.updateProgress = updateProgress
     }
     
     public convenience init?(
@@ -177,264 +380,109 @@ open class LLM: ObservableObject {
         self.template = template
     }
     
+    public convenience init?(
+        from huggingFaceModel: HuggingFaceModel,
+        to url: URL = .documentsDirectory,
+        as name: String? = nil,
+        history: [Chat] = [],
+        seed: UInt32 = .random(in: .min ... .max),
+        topK: Int32 = 40,
+        topP: Float = 0.95,
+        temp: Float = 0.8,
+        historyLimit: Int = 8,
+        maxTokenCount: Int32 = 2048,
+        updateProgress: @Sendable @escaping (Double) -> Void = { print(String(format: "downloaded(%.2f%%)", $0 * 100)) }
+    ) async throws {
+        let url = try await huggingFaceModel.download(to: url, as: name) { progress in
+            Task { @MainActor in updateProgress(progress) }
+        }
+        self.init(
+            from: url,
+            template: huggingFaceModel.template,
+            history: history,
+            seed: seed,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            historyLimit: historyLimit,
+            maxTokenCount: maxTokenCount
+        )
+    }
+    
     deinit {
-        llama_batch_free(batch)
         llama_model_free(model)
     }
     
-    private func predictNextToken() async -> Token {
-        guard shouldContinuePredicting else { return endToken }
-        let samplerParams = llama_sampler_chain_default_params()
-        let sampler = llama_sampler_chain_init(samplerParams)
-        defer { llama_sampler_free(sampler) }
-        
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
-        
-        let i = batch.n_tokens - 1
-        let token = llama_sampler_sample(sampler, context.pointer, i)
-        
-        batch.clear()
-        batch.add(token, currentCount, [0], true)
-        context.decode(batch)
-        return token
+    
+    @MainActor public func setOutput(to newOutput: consuming String) {
+        output = newOutput
     }
     
-    private var currentCount: Int32!
-    private var decoded = ""
-    private var shouldContinuePredicting = false
     public func stop() {
-        shouldContinuePredicting = false
+        Task { await core.stopGeneration() }
     }
     
-    open func recoverFromLengthy(_ input: borrowing String, to output:  borrowing AsyncStream<String>.Continuation) {
-        output.yield("tl;dr")
-    }
     
-    private func prepare(from input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
-        guard !input.isEmpty else { return false }
-        context = .init(model, params)
-        var tokens = encode(input)
-        if tokens.last == nullToken { tokens.removeLast() }
-        var initialCount = tokens.count
-        currentCount = Int32(initialCount)
-        if maxTokenCount <= currentCount {
-            while !history.isEmpty && maxTokenCount <= currentCount {
-                history.removeFirst(min(2, history.count))
-                tokens = encode(preprocess(self.input, history))
-                initialCount = tokens.count
-                currentCount = Int32(initialCount)
-            }
-            if maxTokenCount <= currentCount {
-                isFull = true
-                recoverFromLengthy(input, to: output)
-                return false
-            }
-        }
-        for (i, token) in tokens.enumerated() {
-            batch.n_tokens = Int32(i)
-            batch.add(token, batch.n_tokens, [0], i == initialCount - 1)
-        }
-        context.decode(batch)
-        shouldContinuePredicting = true
-        return true
+    open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
+        output.yield("TL;DR")
     }
-    
-    private func finishResponse(from response: inout [String], to output: borrowing AsyncStream<String>.Continuation) async {
-        var input = ""
-        if !history.isEmpty {
-            history.removeFirst(min(2, history.count))
-            input = preprocess(self.input, history)
-        } else {
-            response.scoup(response.count / 3)
-            input = preprocess(self.input, history)
-            input += response.joined()
-        }
-        let rest = getResponse(from: input)
-        for await restDelta in rest {
-            output.yield(restDelta)
-        }
-    }
-    
-    private func process(_ token: Token, to output: borrowing AsyncStream<String>.Continuation) -> Bool {
-        struct saved {
-            static var stopSequenceEndIndex = 0
-            static var letters: [CChar] = []
-        }
-        guard token != endToken else { return false }
-        var word = decode(token)
-        guard let stopSequence else { output.yield(word); return true }
-        var found = 0 < saved.stopSequenceEndIndex
-        var letters: [CChar] = []
-        for letter in word.utf8CString {
-            guard letter != 0 else { break }
-            if letter == stopSequence[saved.stopSequenceEndIndex] {
-                saved.stopSequenceEndIndex += 1
-                found = true
-                saved.letters.append(letter)
-                guard saved.stopSequenceEndIndex == stopSequenceLength else { continue }
-                saved.stopSequenceEndIndex = 0
-                saved.letters.removeAll()
-                return false
-            } else if found {
-                saved.stopSequenceEndIndex = 0
-                if !saved.letters.isEmpty {
-                    word = String(cString: saved.letters + [0]) + word
-                    saved.letters.removeAll()
-                }
-                output.yield(word)
-                return true
-            }
-            letters.append(letter)
-        }
-        if !letters.isEmpty { output.yield(found ? String(cString: letters + [0]) : word) }
-        return true
-    }
-    
-    private func getResponse(from input: String) -> AsyncStream<String> {
-        .init { output in Task {
-            defer { context = nil }
-            guard prepare(from: input, to: output) else { return output.finish() }
-            var response: [String] = []
-            while currentCount < maxTokenCount {
-                let token = await predictNextToken()
-                let shouldContinue = process(token, to: output)
-                if !shouldContinue { return output.finish() }
-                currentCount += 1
-            }
-            await finishResponse(from: &response, to: output)
-            return output.finish()
-        } }
-    }
-    
-    private var input: String = ""
-    private var isAvailable = true
     
     public func getCompletion(from input: borrowing String) async -> String {
-        guard isAvailable else { fatalError("LLM is being used") }
+        guard isAvailable else { return "LLM is being used" }
+        
         isAvailable = false
-        let response = getResponse(from: input)
+        defer { isAvailable = true }
+        
+        let response = await core.generateResponseStream(from: input)
         var output = ""
+        
         for await responseDelta in response {
             output += responseDelta
         }
-        isAvailable = true
+        
         return output
     }
     
     public func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async {
         guard isAvailable else { return }
+        
         isAvailable = false
+        defer { isAvailable = true }
+        
         self.input = input
         let processedInput = preprocess(input, history)
-        let response = getResponse(from: processedInput)
+        let response = await core.generateResponseStream(from: processedInput)
         let output = await makeOutputFrom(response)
+        
         history += [(.user, input), (.bot, output)]
         let historyCount = history.count
         if historyLimit < historyCount {
             history.removeFirst(min(2, historyCount))
         }
+        
         postprocess(output)
-        isAvailable = true
     }
     
     open func respond(to input: String) async {
-        await respond(to: input) { [self] response in
-            await setOutput(to: "")
+        await respond(to: input) { [weak self] response in
+            guard let self = self else { return "" }
+            
+            await self.setOutput(to: "")
             for await responseDelta in response {
-                update(responseDelta)
-                await setOutput(to: output + responseDelta)
+                self.update(responseDelta)
+                await self.setOutput(to: self.output + responseDelta)
             }
-            update(nil)
-            let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            await setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
-            return output
+            self.update(nil)
+            
+            let trimmedOutput = self.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            await self.setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
+            return self.output
         }
-    }
-
-    private func decode(_ token: Token) -> String {
-        var bufferLength = 16
-        var buffer: [CChar] = .init(repeating: 0, count: bufferLength)
-        var actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
-        guard actualLength != 0 else { return "" }
-        if actualLength < 0 {
-            bufferLength = -actualLength
-            buffer = .init(repeating: 0, count: bufferLength)
-            actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
-        } else {
-            buffer = Array(buffer.prefix(actualLength))
-        }
-        let bytes = buffer.map { UInt8(bitPattern: $0) }
-        guard let decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
-        return decoded
-    }
-
-    public func encode(_ text: borrowing String, shouldAddBOS: Bool = true) -> [Token] {
-        let count = Int32(text.cString(using: .utf8)!.count)
-        var tokenCount = count + 1
-        let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount)); defer { cTokens.deallocate() }
-        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, true)
-        let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
-        return tokens
-    }
-}
-
-extension Vocab {
-    public var endToken: Token { llama_vocab_eos(self) }
-    public var newLineToken: Token { llama_vocab_nl(self) }
-}
-
-private class Context {
-    let pointer: OpaquePointer
-    init(_ model: Model, _ params: llama_context_params) {
-        self.pointer = llama_init_from_model(model, params)
-    }
-    deinit {
-        llama_free(pointer)
-    }
-    func decode(_ batch: llama_batch) {
-        guard llama_decode(pointer, batch) == 0 else { fatalError("llama_decode failed") }
-    }
-}
-
-extension Batch {
-    mutating func clear() {
-        self.n_tokens = 0
     }
     
-    mutating func add(_ token: Token, _ position: Int32, _ ids: [Int], _ logit: Bool) {
-        let i = Int(self.n_tokens)
-        self.token[i] = token
-        self.pos[i] = position
-        self.n_seq_id[i] = Int32(ids.count)
-        if let seq_id = self.seq_id[i] {
-            for (j, id) in ids.enumerated() {
-                seq_id[j] = Int32(id)
-            }
-        }
-        self.logits[i] = logit ? 1 : 0
-        self.n_tokens += 1
+    public func encode(_ text: borrowing String, shouldAddBOS: Bool = true) async -> [Token] {
+        return await core.encode(text, shouldAddBOS: shouldAddBOS)
     }
-}
-
-extension [String] {
-    mutating func scoup(_ count: Int) {
-        guard 0 < count else { return }
-        let firstIndex = count
-        let lastIndex = count * 2
-        self.removeSubrange(firstIndex..<lastIndex)
-    }
-}
-
-extension Token {
-    enum Kind {
-        case end
-        case couldBeEnd
-        case normal
-    }
-    func text(from vocab: Vocab) -> String { String(cString: llama_token_get_text(vocab, self)) }
 }
 
 public enum Role {
@@ -683,5 +731,14 @@ package extension String {
         let range = NSRange(location: 0, length: content.utf16.count)
         guard let match = pattern.firstMatch(in: content, range: range) else { return nil }
         return String(content[Range(match.range, in: content)!])
+    }
+}
+
+extension [String] {
+    mutating func scoup(_ count: Int) {
+        guard 0 < count else { return }
+        let firstIndex = count
+        let lastIndex = count * 2
+        self.removeSubrange(firstIndex..<lastIndex)
     }
 }
