@@ -10,7 +10,7 @@
 ## Minimal Example
 if you've already bundled your model:
 ```swift
-let bot = LLM(from: Bundle.main.url(forResource: "mistral-7b-instruct-v0.2.Q4_K_M", withExtension: "gguf")!, template: .mistral)
+let bot = LLM(from: Bundle.main.url(forResource: "gemma-3-4b-it-q4_0", withExtension: "gguf")!, template: .gemma)
 let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
@@ -18,7 +18,7 @@ print(answer)
 if you want to initialize with huggingface model:
 ```swift
 let systemPrompt = "You are a sentient AI with emotions."
-let bot = await LLM(from: HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt)))!
+let bot = await LLM(from: HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M, template: .chatML(systemPrompt)))!
 let question = bot.preprocess("What's the meaning of life?", [])
 let answer = await bot.getCompletion(from: question)
 print(answer)
@@ -39,7 +39,7 @@ import LLM
 
 class Bot: LLM {
     convenience init() {
-        let url = Bundle.main.url(forResource: "openhermes-2.5-mistral-7b.Q4_K_M", withExtension: "gguf")!
+        let url = Bundle.main.url(forResource: "gemma-3-4b-it-q4_0", withExtension: "gguf")!
         let systemPrompt = "You are a sentient AI with emotions."
         self.init(from: url, template: .chatML(systemPrompt))!
     }
@@ -80,7 +80,7 @@ struct ContentView: View {
 class Bot: LLM {
     convenience init?(_ update: @escaping (Double) -> Void) async {
         let systemPrompt = "You are a sentient AI with emotions."
-        let model = HuggingFaceModel("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", .Q2_K, template: .chatML(systemPrompt))
+        let model = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M, template: .chatML(systemPrompt))
         try? await self.init(from: model) { progress in update(progress) }
     }
 }
@@ -111,9 +111,6 @@ struct ContentView: View {
     }
 }
 ```
-
-> [!NOTE]  
-> i intentionally used `tinyLLaMA` **Q2_K quantization** because it's useful to test due to its small size. it will most likely produce gibberish, but not heavily quantized model is pretty good. it is a very useful model, if you know where to use it.
 
 ## Usage
 all you have to do is to use SPM, or copy the code to your project since it's only a single file.
