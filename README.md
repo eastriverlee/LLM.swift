@@ -262,3 +262,4 @@ The `Embeddings` struct provides:
 - `compare(with:)` - Computes cosine similarity between two embeddings (0.0 to 1.0)
 - `findMostSimilar(in:)` - Returns the most similar embedding from a set of candidates
 - `Equatable` conformance for direct comparison
+

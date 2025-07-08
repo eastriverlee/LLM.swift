@@ -121,6 +121,7 @@ public actor LLMCore {
     func prepareContext(for input: String) -> Bool {
         guard !input.isEmpty else { return false }
         
+        currentTokenCount = 0
         tokenBuffer.removeAll()
         
         var tokens = encode(input)
