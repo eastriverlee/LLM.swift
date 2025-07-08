@@ -249,4 +249,40 @@ final class LLMTests {
         #expect(!tokens.isEmpty)
         #expect(decoded == input)
     }
+    
+    @Test
+    func testEmbeddingsComparison() throws {
+        let embeddings1 = Embeddings(values: [1.0, 0.0, 0.0])
+        let embeddings2 = Embeddings(values: [1.0, 0.0, 0.0])
+        let embeddings3 = Embeddings(values: [0.0, 1.0, 0.0])
+        
+        let similarity12 = embeddings1.compare(with: embeddings2)
+        let similarity13 = embeddings1.compare(with: embeddings3)
+        
+        #expect(similarity12 == 1.0)
+        #expect(similarity13 == 0.0)
+    }
+    
+    @Test
+    func testEmbeddingsMostSimilar() throws {
+        let embeddings1 = Embeddings(values: [1.0, 0.0, 0.0])
+        let embeddings2 = Embeddings(values: [0.9, 0.1, 0.0])
+        let embeddings3 = Embeddings(values: [0.0, 1.0, 0.0])
+        
+        let mostSimilar = embeddings1.findMostSimilar(in: embeddings2, embeddings3)
+        
+        #expect(mostSimilar.values == embeddings2.values)
+    }
+    
+    @Test
+    func testGetEmbeddingsFromHuggingFaceModel() async throws {
+        let bot = try await LLM(from: model)!
+        let input = "hello world"
+        
+        let embeddings = try await bot.getEmbeddings(input)
+        print("embeddings: \(embeddings)")
+        
+        #expect(embeddings.dimension > 0)
+        #expect(embeddings.values.count == embeddings.dimension)
+    }
 }

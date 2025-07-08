@@ -214,6 +214,49 @@ public actor LLMCore {
             }
         }
     }
+    
+    func getEmbeddings(from input: String) throws -> [Float] {
+        guard !input.isEmpty else { throw LLMError.inputTooLong }
+        
+        llama_set_embeddings(context, true)
+        defer { llama_set_embeddings(context, false) }
+        
+        let cleanTokens = prepareTokensForEmbeddings(from: input)
+        try processBatchForEmbeddings(cleanTokens)
+        
+        return try extractEmbeddingsFromContext()
+    }
+    
+    private func prepareTokensForEmbeddings(from input: String) -> [Token] {
+        var tokens = encode(input)
+        if tokens.last == nullToken { tokens.removeLast() }
+        return tokens
+    }
+    
+    private func processBatchForEmbeddings(_ tokens: [Token]) throws {
+        guard !tokens.isEmpty else { throw LLMError.tokenizationFailed }
+        
+        clearBatch()
+        for (i, token) in tokens.enumerated() {
+            addToBatch(token: token, pos: Int32(i), isLogit: i == tokens.count - 1)
+        }
+        
+        guard llama_decode(context, batch) == 0 else { throw LLMError.embeddingsFailed }
+    }
+    
+    private func extractEmbeddingsFromContext() throws -> [Float] {
+        guard let embeddingsPtr = llama_get_embeddings(context) else { throw LLMError.embeddingsFailed }
+        
+        let embeddingDimension = Int(llama_model_n_embd(model))
+        var embeddingsArray: [Float] = []
+        embeddingsArray.reserveCapacity(embeddingDimension)
+        
+        for i in 0..<embeddingDimension {
+            embeddingsArray.append(embeddingsPtr[i])
+        }
+        
+        return embeddingsArray
+    }
 }
 
 public enum LLMError: Error {
@@ -223,6 +266,39 @@ public enum LLMError: Error {
     case decodingFailed
     case inputTooLong
     case decodeFailed
+    case embeddingsFailed
+}
+
+public struct Embeddings: Equatable {
+    public let values: [Float]
+    public let dimension: Int
+    
+    public init(values: [Float]) {
+        self.values = values
+        self.dimension = values.count
+    }
+    
+    public func compare(with other: Embeddings) -> Double {
+        guard dimension == other.dimension else { return 0.0 }
+        
+        let dotProduct = zip(values, other.values).reduce(0) { result, pair in result + pair.0 * pair.1 }
+        let magnitudeA = sqrt(values.reduce(0) { $0 + $1 * $1 })
+        let magnitudeB = sqrt(other.values.reduce(0) { $0 + $1 * $1 })
+        
+        guard magnitudeA > 0 && magnitudeB > 0 else { return 0.0 }
+        
+        let similarity = dotProduct / (magnitudeA * magnitudeB)
+        return max(0, min(1, Double(similarity)))
+    }
+    
+    public func findMostSimilar(in candidates: Embeddings...) -> Embeddings {
+        guard !candidates.isEmpty else { return self }
+        
+        let similarities = candidates.map { compare(with: $0) }
+        let maxIndex = similarities.enumerated().max { $0.element < $1.element }?.offset ?? 0
+        
+        return candidates[maxIndex]
+    }
 }
 
 open class LLM: ObservableObject {
@@ -482,6 +558,11 @@ open class LLM: ObservableObject {
     
     public func encode(_ text: borrowing String, shouldAddBOS: Bool = true) async -> [Token] {
         return await core.encode(text, shouldAddBOS: shouldAddBOS)
+    }
+    
+    public func getEmbeddings(_ text: String) async throws -> Embeddings {
+        let values = try await core.getEmbeddings(from: text)
+        return Embeddings(values: values)
     }
 }
 
