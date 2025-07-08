@@ -221,6 +221,8 @@ public actor LLMCore {
         llama_set_embeddings(context, true)
         defer { llama_set_embeddings(context, false) }
         
+        llama_memory_seq_rm(llama_get_memory(context), 1, -1, -1)
+        
         let cleanTokens = prepareTokensForEmbeddings(from: input)
         try processBatchForEmbeddings(cleanTokens)
         
@@ -238,10 +240,22 @@ public actor LLMCore {
         
         clearBatch()
         for (i, token) in tokens.enumerated() {
-            addToBatch(token: token, pos: Int32(i), isLogit: i == tokens.count - 1)
+            addToBatchForEmbeddings(token: token, pos: Int32(i), isLogit: i == tokens.count - 1)
         }
         
         guard llama_decode(context, batch) == 0 else { throw LLMError.embeddingsFailed }
+    }
+    
+    private func addToBatchForEmbeddings(token: Token, pos: Int32, isLogit: Bool = true) {
+        let i = Int(batch.n_tokens)
+        batch.token[i] = token
+        batch.pos[i] = pos
+        batch.n_seq_id[i] = 1
+        if let seq_id = batch.seq_id[i] {
+            seq_id[0] = 1
+        }
+        batch.logits[i] = isLogit ? 1 : 0
+        batch.n_tokens += 1
     }
     
     private func extractEmbeddingsFromContext() throws -> [Float] {

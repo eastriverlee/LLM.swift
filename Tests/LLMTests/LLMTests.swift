@@ -277,12 +277,38 @@ final class LLMTests {
     @Test
     func testGetEmbeddingsFromHuggingFaceModel() async throws {
         let bot = try await LLM(from: model)!
-        let input = "hello world"
         
-        let embeddings = try await bot.getEmbeddings(input)
-        print("embeddings: \(embeddings)")
+        let embeddings1 = try await bot.getEmbeddings("Hello world")
+        let embeddings2 = try await bot.getEmbeddings("Hi there")
+        let embeddings3 = try await bot.getEmbeddings("Goodbye")
         
-        #expect(embeddings.dimension > 0)
-        #expect(embeddings.values.count == embeddings.dimension)
+        #expect(embeddings1.dimension > 0)
+        #expect(embeddings1.values.count == embeddings1.dimension)
+        
+        let similarity = embeddings1.compare(with: embeddings2)
+        #expect(similarity >= 0.0)
+        #expect(similarity <= 1.0)
+        
+        let mostSimilar = embeddings1.findMostSimilar(in: embeddings2, embeddings3)
+        #expect(mostSimilar == embeddings2 || mostSimilar == embeddings3)
+    }
+    
+    @Test
+    func testEmbeddingsDeterministicAndIndependent() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let embeddings1 = try await bot.getEmbeddings("Hello world")
+        
+        _ = await bot.getCompletion(from: "Tell me a joke")
+        
+        let embeddings2 = try await bot.getEmbeddings("Hello world")
+        
+        await bot.respond(to: "What is 2+2?")
+        
+        let embeddings3 = try await bot.getEmbeddings("Hello world")
+        
+        #expect(embeddings1 == embeddings2)
+        #expect(embeddings2 == embeddings3)
+        #expect(embeddings1 == embeddings3)
     }
 }

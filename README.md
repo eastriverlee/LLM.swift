@@ -238,3 +238,27 @@ if you use regular `func respond(to input: String) async` `update` function that
 `outputDelta` is `nil` when it stops generating the output.
 
 if you want more control over everything you can use `func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async` instead, which the aforementioned function uses internally, to define your own version of `makeOutputFrom` function that is used to make `String` typed output out of `AsyncStream<String>` and add to its history. in this case, `update` function will be ignored unless you use it. check `func respond(to input: String) async` implementation shown above to understand how it works.
+
+## Embeddings
+
+LLM.swift supports text embeddings for semantic similarity and search applications:
+
+```swift
+// Generate embeddings for text
+let embeddings1 = try await bot.getEmbeddings("Hello world")
+let embeddings2 = try await bot.getEmbeddings("Hi there")
+let embeddings3 = try await bot.getEmbeddings("Goodbye")
+
+// Compare similarity (returns 0.0 to 1.0)
+let similarity = embeddings1.compare(with: embeddings2)
+print(similarity) // 0.8 (high similarity)
+
+// Find most similar embedding
+let mostSimilar = embeddings1.findMostSimilar(in: embeddings2, embeddings3)
+print(mostSimilar == embeddings2) // true
+```
+
+The `Embeddings` struct provides:
+- `compare(with:)` - Computes cosine similarity between two embeddings (0.0 to 1.0)
+- `findMostSimilar(in:)` - Returns the most similar embedding from a set of candidates
+- `Equatable` conformance for direct comparison
