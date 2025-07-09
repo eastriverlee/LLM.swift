@@ -31,6 +31,7 @@ public actor LLMCore {
     
     private var shouldContinuePredicting = false
     private var currentTokenCount: Int32 = 0
+    private var debugLastGeneratedTokens: [Token] = []
     
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil) {
         if let seed { self.seed = seed }
@@ -79,13 +80,13 @@ public actor LLMCore {
     }
     
     
-    public func encode(_ text: String, shouldAddBOS: Bool = true) -> [Token] {
+    public func encode(_ text: String, shouldAddBOS: Bool = true, special: Bool = true) -> [Token] {
         let count = Int32(text.cString(using: .utf8)!.count)
         var tokenCount = count + 1
         let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount))
         defer { cTokens.deallocate() }
         
-        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, true)
+        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, special)
         let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
         return tokens
     }
@@ -105,12 +106,16 @@ public actor LLMCore {
             bufferLength = -actualLength
             buffer = .init(repeating: 0, count: bufferLength)
             actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
-        } else {
-            buffer = Array(buffer.prefix(actualLength))
+            guard actualLength > 0 else { return "" }
         }
         
-        let bytes = buffer.map { UInt8(bitPattern: $0) }
-        guard let decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
+        let validBuffer = Array(buffer.prefix(actualLength))
+        let bytes = validBuffer.map { UInt8(bitPattern: $0) }
+        guard var decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
+
+        if decoded.contains("\0") {
+            decoded = decoded.filter { $0 != "\0" }
+        }
         
         tokenDecodeCache.setObject(decoded as NSString, forKey: NSNumber(value: token))
         
@@ -272,6 +277,270 @@ public actor LLMCore {
         
         return embeddingsArray
     }
+    
+    public func getLastGeneratedTokens() -> [Token] {
+        return debugLastGeneratedTokens
+    }
+
+    func generateWithConstraints(from input: String, jsonSchema: String) throws -> String {
+        debugLastGeneratedTokens = []
+        guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
+        guard let parsedSchema = parseJSONSchema(jsonSchema) else { throw LLMError.contextCreationFailed }
+        var output = ""
+        
+        try addToken("{", to: &output)
+        
+        for (index, field) in parsedSchema.requiredFields.enumerated() {
+            try addToken("\"\(field.name)\":", to: &output)
+            
+            switch field.type {
+            case .string:
+                try generateStringValue(into: &output)
+            case .integer:
+                try generateIntegerValue(into: &output)
+            case .boolean:
+                try generateBooleanValue(into: &output)
+            default:
+                try addToken("null", to: &output)
+            }
+            
+            if index < parsedSchema.requiredFields.count - 1 {
+                try addToken(",", to: &output)
+            }
+        }
+
+        try addToken("}", to: &output)
+        
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func addToken(_ token: Token, to output: inout String) throws {
+                clearBatch()
+                addToBatch(token: token, pos: currentTokenCount)
+        guard llama_decode(context, batch) == 0 else {
+            shouldContinuePredicting = false
+            throw LLMError.decodingFailed
+                }
+                currentTokenCount += 1
+                output += decode(token)
+        debugLastGeneratedTokens.append(token)
+            }
+            
+    private func addToken(_ string: String, to output: inout String) throws {
+        let tokens = encode(string, shouldAddBOS: false, special: false)
+        for token in tokens {
+            try addToken(token, to: &output)
+        }
+    }
+
+    private func generateStringValue(into output: inout String) throws {
+        try addToken("\"", to: &output)
+
+        let maxTokens = 15
+        var tokensInString: [Token] = []
+        let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
+
+        var hasContent = false
+        
+        while tokensInString.count < maxTokens {
+            var allowedTokens = getStringTokensForField()
+            if hasContent {
+                            allowedTokens.insert(quoteToken)
+            } else {
+                allowedTokens.remove(encode(" ", shouldAddBOS: false, special: false).first!)
+            }
+            
+            let predictedToken = sampleNextToken(from: allowedTokens)
+            guard predictedToken != endToken else { break }
+
+            if predictedToken == quoteToken {
+                try addToken(predictedToken, to: &output)
+                return
+            }
+
+            try addToken(predictedToken, to: &output)
+            let decoded = decode(predictedToken)
+            tokensInString.append(predictedToken)
+
+            if !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
+                hasContent = true
+            }
+
+            if tokensInString.count > 2 && tokensInString.last == tokensInString[tokensInString.count - 2] {
+                        break
+                    }
+                }
+                
+        if !output.hasSuffix("\"") {
+            try addToken("\"", to: &output)
+        }
+    }
+
+    private func generateIntegerValue(into output: inout String) throws {
+        let maxLength = 2
+        var generatedString = ""
+        let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+
+        guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
+
+        while generatedString.count < maxLength {
+            let predictedToken = sampleNextToken(from: digitTokens)
+            guard predictedToken != endToken else { break }
+            
+            let decoded = decode(predictedToken)
+            if generatedString.isEmpty && decoded == "0" && maxLength > 1 {
+                continue
+            }
+            
+            try addToken(predictedToken, to: &output)
+            generatedString += decoded
+        }
+
+        if generatedString.isEmpty {
+            throw LLMError.decodingFailed
+        }
+    }
+
+    private func generateBooleanValue(into output: inout String) throws {
+        let trueToken = encode("true", shouldAddBOS: false, special: false).first!
+        let falseToken = encode("false", shouldAddBOS: false, special: false).first!
+        let allowedTokens = Set([trueToken, falseToken])
+
+        let predictedToken = sampleNextToken(from: allowedTokens)
+        guard predictedToken != endToken else {
+            try addToken("false", to: &output)
+            return
+        }
+
+        try addToken(predictedToken, to: &output)
+    }
+    
+    // MARK: - Schema-Driven JSON Generation
+    
+    private enum JSONFieldType {
+        case string
+        case integer
+        case number
+        case boolean
+        case object
+        case array
+    }
+    
+    private struct SchemaField: Equatable {
+        let name: String
+        let type: JSONFieldType
+        let required: Bool
+    }
+    
+    private struct ParsedSchema {
+        let fields: [SchemaField]
+        let requiredFields: [SchemaField]
+    }
+    
+    private func getStringTokensForField() -> Set<Token> {
+        var tokens: Set<Token> = []
+        
+        for i in 0..<totalTokenCount {
+            let token = Token(i)
+            let decoded = decode(token)
+            
+            if !decoded.isEmpty && decoded.count <= 10 && decoded.allSatisfy({ char in
+                let ascii = char.asciiValue ?? 0
+                return ascii >= 32 && ascii <= 126 &&
+                       (char.isLetter || char == " " ||
+                        ".-_'".contains(char))
+            }) && !decoded.contains(where: { $0.isNumber }) {
+                tokens.insert(token)
+            }
+        }
+        
+        return tokens
+    }
+    
+    private func parseJSONSchema(_ schemaString: String) -> ParsedSchema? {
+        guard let schemaData = schemaString.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
+              let properties = schema["properties"] as? [String: Any] else {
+            return nil
+        }
+        
+        let required = schema["required"] as? [String] ?? []
+        var fields: [SchemaField] = []
+        
+        for (fieldName, fieldData) in properties {
+            guard let fieldInfo = fieldData as? [String: Any],
+                  let typeString = fieldInfo["type"] as? String else {
+                continue
+            }
+            
+            let fieldType: JSONFieldType
+            switch typeString {
+            case "string": fieldType = .string
+            case "integer": fieldType = .integer
+            case "number": fieldType = .number
+            case "boolean": fieldType = .boolean
+            case "object": fieldType = .object
+            case "array": fieldType = .array
+            default: continue
+            }
+            
+            let isRequired = required.contains(fieldName)
+            fields.append(SchemaField(name: fieldName, type: fieldType, required: isRequired))
+        }
+        
+        let requiredFields = fields.filter { $0.required }
+        return ParsedSchema(fields: fields, requiredFields: requiredFields)
+    }
+    
+    private func sampleNextToken(from allowedTokens: Set<Token>) -> Token {
+        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else {
+            return endToken
+        }
+        
+        let samplerParams = llama_sampler_chain_default_params()
+        let sampler = llama_sampler_chain_init(samplerParams)
+        defer { llama_sampler_free(sampler) }
+        
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
+        
+        let i = batch.n_tokens - 1
+        let token = llama_sampler_sample(sampler, context, i)
+        
+        if allowedTokens.isEmpty { return token }
+        
+        return allowedTokens.contains(token) ? token : findBestAllowedToken(allowedTokens: allowedTokens)
+    }
+    
+    private func findBestAllowedToken(allowedTokens: Set<Token>) -> Token {
+        guard !allowedTokens.isEmpty else { return Token(32) }
+        
+        // If there's only one token, return it directly
+        if allowedTokens.count == 1 {
+            return allowedTokens.first!
+        }
+        
+        let logits = llama_get_logits(context)!
+        
+        return allowedTokens.max { logits[Int($0)] < logits[Int($1)] } ?? allowedTokens.first!
+    }
+    
+    private func isValidJSON(_ text: String) -> Bool {
+        guard let data = text.data(using: .utf8) else { return false }
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            return true
+        } catch {
+            return false
+        }
+    }
+    
+    private func isComplete(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("{") && trimmed.hasSuffix("}")
+    }
 }
 
 public enum LLMError: Error {
@@ -314,6 +583,26 @@ public struct Embeddings: Equatable {
         
         return candidates[maxIndex]
     }
+}
+
+public protocol Generable {
+    static var jsonSchema: String { get }
+}
+
+public struct StructuredOutput<T: Generable & Codable> {
+    public let value: T
+    public let rawOutput: String
+    
+    public init(value: T, rawOutput: String) {
+        self.value = value
+        self.rawOutput = rawOutput
+    }
+}
+
+public enum StructuredOutputError: Error {
+    case invalidJSON
+    case schemaMismatch
+    case decodingFailed
 }
 
 open class LLM: ObservableObject {
@@ -579,6 +868,40 @@ open class LLM: ObservableObject {
         let values = try await core.getEmbeddings(from: text)
         return Embeddings(values: values)
     }
+    
+    public func generateStructured<T: Generable & Codable>(
+        prompt: String,
+        type: T.Type
+    ) async throws -> StructuredOutput<T> {
+        let schemaPrompt = """
+        \(prompt)
+        
+        Generate a JSON response that:
+        Matches this exact schema: \(T.jsonSchema)
+        Return only the JSON object, no other text.
+        """
+        
+        let rawOutput = try await core.generateWithConstraints(
+            from: schemaPrompt,
+            jsonSchema: T.jsonSchema
+        )
+        
+        guard let jsonData = rawOutput.data(using: .utf8) else {
+            throw StructuredOutputError.invalidJSON
+        }
+        
+        do {
+            let decodedValue = try JSONDecoder().decode(T.self, from: jsonData)
+            return StructuredOutput(value: decodedValue, rawOutput: rawOutput)
+        } catch {
+            print("JSON Decoding failed:")
+            print("Raw output: '\(rawOutput)'")
+            print("JSON data: '\(String(data: jsonData, encoding: .utf8) ?? "nil")'")
+            print("Error: \(error)")
+            print("Schema: \(T.jsonSchema)")
+            throw StructuredOutputError.decodingFailed
+        }
+    }
 }
 
 public enum Role {
@@ -838,3 +1161,4 @@ extension [String] {
         self.removeSubrange(firstIndex..<lastIndex)
     }
 }
+

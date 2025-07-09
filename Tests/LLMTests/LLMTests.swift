@@ -311,4 +311,47 @@ final class LLMTests {
         #expect(embeddings2 == embeddings3)
         #expect(embeddings1 == embeddings3)
     }
+    
+    struct Person: Codable, Generable {
+        let name: String
+        let age: Int
+        let occupation: String
+        let personality: String
+        
+        static var jsonSchema: String {
+            """
+            {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                    "occupation": {"type": "string"},
+                    "personality": {"type": "string"}
+                },
+                "required": ["name", "age", "occupation", "personality"]
+            }
+            """
+        }
+    }
+    
+    @Test
+    func testStructuredOutput() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.generateStructured(
+            prompt: "Create a person",
+            type: Person.self
+        )
+        
+        print(result.value)
+        #expect(result.value.name.count > 0)
+        #expect(result.value.age > 0)
+        #expect(result.value.occupation.count > 0)
+        #expect(result.value.personality.count > 0)
+        #expect(!result.rawOutput.isEmpty)
+        
+        let jsonData = result.rawOutput.data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
 }
