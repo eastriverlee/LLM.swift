@@ -296,12 +296,16 @@ public actor LLMCore {
             try addToken("\"\(field.name)\":", to: &output)
             
             switch field.type {
-            case .string:
-                try generateStringValue(into: &output)
+            case .string(let allowedValues):
+                try generateStringValue(into: &output, allowedValues: allowedValues)
             case .integer:
                 try generateIntegerValue(into: &output)
+            case .number:
+                try generateFloatingPointValue(into: &output)
             case .boolean:
                 try generateBooleanValue(into: &output)
+            case .array(let itemType):
+                try generateArrayValue(into: &output, ofType: itemType)
             default:
                 try addToken("null", to: &output)
             }
@@ -335,7 +339,18 @@ public actor LLMCore {
         }
     }
     
-    private func generateStringValue(into output: inout String) throws {
+    private func generateStringValue(into output: inout String, allowedValues: [String]? = nil) throws {
+        if let allowedValues, !allowedValues.isEmpty {
+            let value = allowedValues.first!
+            try addToken("\"", to: &output)
+            let tokens = encode(value, shouldAddBOS: false, special: false)
+            for token in tokens {
+                try addToken(token, to: &output)
+            }
+            try addToken("\"", to: &output)
+            return
+        }
+
         try addToken("\"", to: &output)
         
         let maxTokens = 32
@@ -382,39 +397,92 @@ public actor LLMCore {
         let maxLength = 19
         var generatedString = ""
         let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
-        let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+        let minusToken = encode("-", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
+        let terminators = Set([commaToken, closingBraceToken])
 
         guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
 
-        let firstPredictedToken = sampleNextToken(from: digitTokens)
-        guard firstPredictedToken != endToken else {
-            throw LLMError.decodingFailed
-        }
-
-        try addToken(firstPredictedToken, to: &output)
-        generatedString += decode(firstPredictedToken)
-
-        if firstPredictedToken == zeroToken || maxLength == 1 {
-            return
-        }
-
-        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
-        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
-
-        var subsequentAllowedTokens = digitTokens
-        subsequentAllowedTokens.insert(commaToken)
-        subsequentAllowedTokens.insert(closingBraceToken)
-
         while generatedString.count < maxLength {
-            let predictedToken = sampleNextToken(from: subsequentAllowedTokens)
-            guard predictedToken != endToken else { break }
+            var allowedTokens: Set<Token>
 
-            if !digitTokens.contains(predictedToken) {
+            if generatedString.isEmpty {
+                allowedTokens = digitTokens.union([minusToken])
+            } else if generatedString == "-" {
+                allowedTokens = digitTokens
+            } else if generatedString == "0" || generatedString == "-0" {
+                allowedTokens = terminators
+            } else { // is a number like "12", "-34"
+                allowedTokens = digitTokens.union(terminators)
+            }
+
+            let nextToken = sampleNextToken(from: allowedTokens)
+            guard nextToken != endToken else { break }
+
+            if terminators.contains(nextToken) {
                 break
             }
 
-            try addToken(predictedToken, to: &output)
-            generatedString += decode(predictedToken)
+            try addToken(nextToken, to: &output)
+            generatedString += decode(nextToken)
+        }
+
+        if generatedString.isEmpty || generatedString == "-" {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
+        }
+    }
+    
+    private func generateFloatingPointValue(into output: inout String) throws {
+        let maxLength = 10
+        var generatedString = ""
+        let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        let minusToken = encode("-", shouldAddBOS: false, special: false).first!
+        let dotToken = encode(".", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
+        let terminators = Set([commaToken, closingBraceToken])
+
+        guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
+
+        while generatedString.count < maxLength {
+            var allowedTokens: Set<Token>
+
+            if generatedString.isEmpty {
+                allowedTokens = digitTokens.union([minusToken])
+            } else if generatedString == "-" {
+                allowedTokens = digitTokens
+            } else if generatedString == "0" || generatedString == "-0" {
+                allowedTokens = terminators.union([dotToken])
+            } else if generatedString.contains(".") {
+                allowedTokens = digitTokens.union(terminators)
+            } else { // integer part, e.g. "12", "-34"
+                allowedTokens = digitTokens.union(terminators).union([dotToken])
+            }
+
+            let nextToken = sampleNextToken(from: allowedTokens)
+            guard nextToken != endToken else { break }
+
+            if terminators.contains(nextToken) {
+                break
+            }
+            
+            let decoded = decode(nextToken)
+            if decoded == "." && generatedString.contains(".") { break }
+
+            try addToken(nextToken, to: &output)
+            generatedString += decoded
+        }
+        
+        if generatedString.isEmpty || generatedString == "-" {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
+        }
+
+        if generatedString.last == "." {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
         }
     }
     
@@ -432,15 +500,59 @@ public actor LLMCore {
         try addToken(predictedToken, to: &output)
     }
     
+    private func generateArrayValue(into output: inout String, ofType itemType: JSONFieldType) throws {
+        try addToken("[", to: &output)
+        
+        let maxItems = 5
+        var itemCount = 0
+        
+        let closingBracketToken = encode("]", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        
+        while itemCount < maxItems {
+            switch itemType {
+            case .string(let allowedValues):
+                try generateStringValue(into: &output, allowedValues: allowedValues)
+            case .integer:
+                try generateIntegerValue(into: &output)
+            case .number:
+                try generateFloatingPointValue(into: &output)
+            case .boolean:
+                try generateBooleanValue(into: &output)
+            default:
+                break
+            }
+            
+            itemCount += 1
+            
+            if itemCount >= maxItems {
+                break
+            }
+            
+            let subsequentTokens = Set([commaToken, closingBracketToken])
+            let nextToken = sampleNextToken(from: subsequentTokens)
+            
+            try addToken(nextToken, to: &output)
+            
+            if nextToken == closingBracketToken {
+                return
+            }
+        }
+        
+        if !output.hasSuffix("]") {
+            try addToken("]", to: &output)
+        }
+    }
+    
     // MARK: - Schema-Driven JSON Generation
     
-    private enum JSONFieldType {
-        case string
+    private enum JSONFieldType: Equatable {
+        case string(allowedValues: [String]?)
         case integer
         case number
         case boolean
         case object
-        case array
+        indirect case array(itemType: JSONFieldType)
     }
     
     private struct SchemaField: Equatable {
@@ -485,20 +597,31 @@ public actor LLMCore {
         var fields: [SchemaField] = []
         
         for (fieldName, fieldData) in properties {
-            guard let fieldInfo = fieldData as? [String: Any],
-                  let typeString = fieldInfo["type"] as? String else {
-                continue
-            }
+            guard let fieldInfo = fieldData as? [String: Any] else { continue }
             
             let fieldType: JSONFieldType
-            switch typeString {
-            case "string": fieldType = .string
-            case "integer": fieldType = .integer
-            case "number": fieldType = .number
-            case "boolean": fieldType = .boolean
-            case "object": fieldType = .object
-            case "array": fieldType = .array
-            default: continue
+            if let enumValues = fieldInfo["enum"] as? [String] {
+                fieldType = .string(allowedValues: enumValues)
+            } else {
+                let typeString = fieldInfo["type"] as? String ?? ""
+                switch typeString {
+                case "string": fieldType = .string(allowedValues: nil)
+                case "integer": fieldType = .integer
+                case "number": fieldType = .number
+                case "boolean": fieldType = .boolean
+                case "object": fieldType = .object
+                case "array":
+                    guard let items = fieldInfo["items"] as? [String: String],
+                          let itemTypeString = items["type"] else { continue }
+                    switch itemTypeString {
+                    case "string": fieldType = .array(itemType: .string(allowedValues: nil))
+                    case "integer": fieldType = .array(itemType: .integer)
+                    case "number": fieldType = .array(itemType: .number)
+                    case "boolean": fieldType = .array(itemType: .boolean)
+                    default: continue
+                    }
+                default: continue
+                }
             }
             
             let isRequired = required.contains(fieldName)

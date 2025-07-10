@@ -373,4 +373,131 @@ final class LLMTests {
         let parsed = try JSONSerialization.jsonObject(with: jsonData)
         #expect(parsed is [String: Any])
     }
+
+    @Generatable
+    struct Measurements {
+        let height: Double
+        let weight: Float
+    }
+
+    @Test
+    func testStructuredOutputWithMeasurements() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate measurements of a random person in meters and kilograms",
+            as: Measurements.self
+        )
+        let measurements = result.value
+        let output = result.rawOutput
+        
+        print(measurements)
+        #expect(measurements.height > 0.0)
+        #expect(measurements.weight > 0.0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct SignedNumbers {
+        let anInteger: Int
+        let aFloat: Float
+        let aDouble: Double
+    }
+
+    @Test
+    func testStructuredOutputWithSignedNumbers() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate an integer, a float and a double. They all must be negative.",
+            as: SignedNumbers.self
+        )
+        let numbers = result.value
+        let output = result.rawOutput
+        
+        print(numbers)
+        #expect(numbers.anInteger < 0)
+        #expect(numbers.aFloat < 0)
+        #expect(numbers.aDouble < 0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct ShoppingList {
+        let items: [String]
+    }
+
+    @Test
+    func testStructuredOutputWithShoppingList() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate a shopping list with groceries.",
+            as: ShoppingList.self
+        )
+        let list = result.value
+        let output = result.rawOutput
+        
+        print(list)
+        #expect(!list.items.isEmpty)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    enum Color {
+        case red
+        case green
+        case blue
+    }
+
+    @Generatable
+    struct Vegetable {
+        let color: Color
+        let name: String
+    }
+
+    @Test
+    func testColorSchema() {
+        print("Color schema: \(Color.jsonSchema)")
+        print("ColoredItem schema: \(Vegetable.jsonSchema)")
+        let schema = try! JSONSerialization.jsonObject(with: Vegetable.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        let properties = schema["properties"] as! [String: Any]
+        print("properties keys: \(properties.keys)")
+        let color = properties["color"] as! [String: Any]
+        print("color: \(color)")
+        #expect(color["enum"] as? [String] == ["red", "green", "blue"])
+    }
+    
+    @Test
+    func testStructuredOutputWithVegetable() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Give me any vegetable.",
+            as: Vegetable.self
+        )
+        let item = result.value
+        let output = result.rawOutput
+        
+        print(item)
+        #expect(!item.name.isEmpty)
+        #expect([.red, .green, .blue].contains(item.color))
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
 }
