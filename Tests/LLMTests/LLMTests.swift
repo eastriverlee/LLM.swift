@@ -311,46 +311,65 @@ final class LLMTests {
         #expect(embeddings2 == embeddings3)
         #expect(embeddings1 == embeddings3)
     }
+
+    //MARK: Generatable macro tests
     
-    struct Person: Codable, Generable {
+    @Generatable
+    struct Person {
         let name: String
         let age: Int
         let occupation: String
         let personality: String
-        
-        static var jsonSchema: String {
-            """
-            {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "age": {"type": "integer"},
-                    "occupation": {"type": "string"},
-                    "personality": {"type": "string"}
-                },
-                "required": ["name", "age", "occupation", "personality"]
-            }
-            """
-        }
     }
     
     @Test
     func testStructuredOutput() async throws {
         let bot = try await LLM(from: model)!
         
-        let result = try await bot.generateStructured(
-            prompt: "Create a person",
-            type: Person.self
+        let result = try await bot.respond(
+            to: "Create a person",
+            as: Person.self
         )
+        let person = result.value
+        let output = result.rawOutput
         
-        print(result.value)
-        #expect(result.value.name.count > 0)
-        #expect(result.value.age > 0)
-        #expect(result.value.occupation.count > 0)
-        #expect(result.value.personality.count > 0)
-        #expect(!result.rawOutput.isEmpty)
+        print(person)
+        #expect(person.name.count > 0)
+        #expect(person.age > 0)
+        #expect(person.occupation.count > 0)
+        #expect(person.personality.count > 0)
+        #expect(!output.isEmpty)
         
-        let jsonData = result.rawOutput.data(using: .utf8)!
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Book {
+        let title: String
+        let pages: Int
+        let author: String
+    }
+
+    @Test
+    func testStructuredOutputWithBook() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate a book with a title, number of pages, and an author.",
+            as: Book.self
+        )
+        let book = result.value
+        let output = result.rawOutput
+        
+        print(book)
+        #expect(book.title.count > 0)
+        #expect(book.pages > 0)
+        #expect(book.author.count > 0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
         let parsed = try JSONSerialization.jsonObject(with: jsonData)
         #expect(parsed is [String: Any])
     }

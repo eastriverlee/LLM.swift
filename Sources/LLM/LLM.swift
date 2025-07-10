@@ -1,5 +1,7 @@
 import Foundation
 import llama
+@_exported import LLMMacros
+
 
 public typealias Token = llama_token
 public typealias Batch = llama_batch
@@ -112,7 +114,7 @@ public actor LLMCore {
         let validBuffer = Array(buffer.prefix(actualLength))
         let bytes = validBuffer.map { UInt8(bitPattern: $0) }
         guard var decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
-
+        
         if decoded.contains("\0") {
             decoded = decoded.filter { $0 != "\0" }
         }
@@ -163,8 +165,8 @@ public actor LLMCore {
     }
     
     func predictNextToken() -> Token {
-        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else { 
-            return endToken 
+        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else {
+            return endToken
         }
         
         let samplerParams = llama_sampler_chain_default_params()
@@ -281,7 +283,7 @@ public actor LLMCore {
     public func getLastGeneratedTokens() -> [Token] {
         return debugLastGeneratedTokens
     }
-
+    
     func generateWithConstraints(from input: String, jsonSchema: String) throws -> String {
         debugLastGeneratedTokens = []
         guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
@@ -308,110 +310,125 @@ public actor LLMCore {
                 try addToken(",", to: &output)
             }
         }
-
+        
         try addToken("}", to: &output)
         
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-
+    
     private func addToken(_ token: Token, to output: inout String) throws {
-                clearBatch()
-                addToBatch(token: token, pos: currentTokenCount)
+        clearBatch()
+        addToBatch(token: token, pos: currentTokenCount)
         guard llama_decode(context, batch) == 0 else {
             shouldContinuePredicting = false
             throw LLMError.decodingFailed
-                }
-                currentTokenCount += 1
-                output += decode(token)
+        }
+        currentTokenCount += 1
+        output += decode(token)
         debugLastGeneratedTokens.append(token)
-            }
-            
+    }
+    
     private func addToken(_ string: String, to output: inout String) throws {
         let tokens = encode(string, shouldAddBOS: false, special: false)
         for token in tokens {
             try addToken(token, to: &output)
         }
     }
-
+    
     private func generateStringValue(into output: inout String) throws {
         try addToken("\"", to: &output)
-
-        let maxTokens = 15
+        
+        let maxTokens = 32
         var tokensInString: [Token] = []
         let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
-
+        
         var hasContent = false
         
         while tokensInString.count < maxTokens {
             var allowedTokens = getStringTokensForField()
             if hasContent {
-                            allowedTokens.insert(quoteToken)
+                allowedTokens.insert(quoteToken)
             } else {
                 allowedTokens.remove(encode(" ", shouldAddBOS: false, special: false).first!)
             }
             
             let predictedToken = sampleNextToken(from: allowedTokens)
             guard predictedToken != endToken else { break }
-
+            
             if predictedToken == quoteToken {
                 try addToken(predictedToken, to: &output)
                 return
             }
-
+            
             try addToken(predictedToken, to: &output)
             let decoded = decode(predictedToken)
             tokensInString.append(predictedToken)
-
+            
             if !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
                 hasContent = true
             }
-
+            
             if tokensInString.count > 2 && tokensInString.last == tokensInString[tokensInString.count - 2] {
-                        break
-                    }
-                }
-                
+                break
+            }
+        }
+        
         if !output.hasSuffix("\"") {
             try addToken("\"", to: &output)
         }
     }
-
+    
     private func generateIntegerValue(into output: inout String) throws {
-        let maxLength = 2
+        let maxLength = 19
         var generatedString = ""
         let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
 
         guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
 
-        while generatedString.count < maxLength {
-            let predictedToken = sampleNextToken(from: digitTokens)
-            guard predictedToken != endToken else { break }
-            
-            let decoded = decode(predictedToken)
-            if generatedString.isEmpty && decoded == "0" && maxLength > 1 {
-                continue
-            }
-            
-            try addToken(predictedToken, to: &output)
-            generatedString += decoded
-        }
-
-        if generatedString.isEmpty {
+        let firstPredictedToken = sampleNextToken(from: digitTokens)
+        guard firstPredictedToken != endToken else {
             throw LLMError.decodingFailed
         }
-    }
 
+        try addToken(firstPredictedToken, to: &output)
+        generatedString += decode(firstPredictedToken)
+
+        if firstPredictedToken == zeroToken || maxLength == 1 {
+            return
+        }
+
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
+
+        var subsequentAllowedTokens = digitTokens
+        subsequentAllowedTokens.insert(commaToken)
+        subsequentAllowedTokens.insert(closingBraceToken)
+
+        while generatedString.count < maxLength {
+            let predictedToken = sampleNextToken(from: subsequentAllowedTokens)
+            guard predictedToken != endToken else { break }
+
+            if !digitTokens.contains(predictedToken) {
+                break
+            }
+
+            try addToken(predictedToken, to: &output)
+            generatedString += decode(predictedToken)
+        }
+    }
+    
     private func generateBooleanValue(into output: inout String) throws {
         let trueToken = encode("true", shouldAddBOS: false, special: false).first!
         let falseToken = encode("false", shouldAddBOS: false, special: false).first!
         let allowedTokens = Set([trueToken, falseToken])
-
+        
         let predictedToken = sampleNextToken(from: allowedTokens)
         guard predictedToken != endToken else {
             try addToken("false", to: &output)
             return
         }
-
+        
         try addToken(predictedToken, to: &output)
     }
     
@@ -447,8 +464,8 @@ public actor LLMCore {
             if !decoded.isEmpty && decoded.count <= 10 && decoded.allSatisfy({ char in
                 let ascii = char.asciiValue ?? 0
                 return ascii >= 32 && ascii <= 126 &&
-                       (char.isLetter || char == " " ||
-                        ".-_'".contains(char))
+                (char.isLetter || char == " " ||
+                 ".-_'".contains(char))
             }) && !decoded.contains(where: { $0.isNumber }) {
                 tokens.insert(token)
             }
@@ -585,11 +602,7 @@ public struct Embeddings: Equatable {
     }
 }
 
-public protocol Generable {
-    static var jsonSchema: String { get }
-}
-
-public struct StructuredOutput<T: Generable & Codable> {
+public struct StructuredOutput<T: Generatable> {
     public let value: T
     public let rawOutput: String
     
@@ -657,6 +670,15 @@ open class LLM: ObservableObject {
     private var isAvailable = true
     private var input: String = ""
     
+    static var isLogSilenced = false
+    static func silenceLogging() {
+        guard !isLogSilenced else { return }
+        isLogSilenced = true
+        let noopCallback: @convention(c) (ggml_log_level, UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { _, _, _ in }
+        llama_log_set(noopCallback, nil)
+        ggml_log_set(noopCallback, nil)
+    }
+    
     
     public init?(
         from path: String,
@@ -669,6 +691,7 @@ open class LLM: ObservableObject {
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
+        LLM.silenceLogging()
         self.path = path.cString(using: .utf8)!
         self.seed = seed
         self.topK = topK
@@ -869,9 +892,9 @@ open class LLM: ObservableObject {
         return Embeddings(values: values)
     }
     
-    public func generateStructured<T: Generable & Codable>(
-        prompt: String,
-        type: T.Type
+    public func respond<T: Generatable>(
+        to prompt: String,
+        as type: T.Type
     ) async throws -> StructuredOutput<T> {
         let schemaPrompt = """
         \(prompt)
@@ -998,7 +1021,7 @@ public struct Template: Sendable {
         stopSequence: "</s>",
         systemPrompt: nil
     )
-
+    
     public static let gemma = Template(
         user: ("<start_of_turn>user\n", "<end_of_turn>\n"),
         bot: ("<start_of_turn>model\n", "<end_of_turn>\n"),
@@ -1069,7 +1092,7 @@ public struct HuggingFaceModel {
         let root = "https://huggingface.co"
         return matches.map { match in root + match }
     }
-
+    
     package func getDownloadURL() async throws -> URL? {
         let urlStrings = try await getDownloadURLStrings()
         for urlString in urlStrings {
