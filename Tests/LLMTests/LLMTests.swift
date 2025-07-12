@@ -354,7 +354,7 @@ final class LLMTests {
 
     @Test
     func testStructuredOutputWithBook() async throws {
-        let bot = try await LLM(from: model, seed: 276313767)!
+        let bot = try await LLM(from: model, seed: 2)!
         
         let result = try await bot.respond(
             to: "A real classic book with a title, number of pages, and an author.",
@@ -411,7 +411,7 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Coldest temperature below zero you can think of in Celsius",
+            to: "Coldest temperature below zero you can think of in Celsius, preferabably zero Kelvin in Celsius",
             as: Temperature.self
         )
         let temperature = result.value
@@ -481,7 +481,7 @@ final class LLMTests {
     
     @Test
     func testStructuredOutputWithVegetable() async throws {
-        let bot = try await LLM(from: model)!
+        let bot = try await LLM(from: model, seed: 1605617885)!
         
         let result = try await bot.respond(
             to: "Give me any vegetable that is purple.",

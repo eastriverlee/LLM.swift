@@ -20,12 +20,16 @@ public actor LLMCore {
     private(set) var topK: Int32
     private(set) var topP: Float
     private(set) var temp: Float
+    private(set) var repeatPenalty: Float
+    private(set) var repetitionLookback: Int32
     
     private let maxTokenCount: Int
     private let totalTokenCount: Int
     private lazy var newlineToken: Token = llama_vocab_nl(vocab)
     private lazy var endToken: Token = llama_vocab_eos(vocab)
     private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
+    private lazy var quoteToken: Token = encode("\"", shouldAddBOS: false, special: false).first!
+    private lazy var whitespaceToken: Token = encode(" ", shouldAddBOS: false, special: false).first!
     
     private var stopSequenceTokens: [Token]?
     private var tokenBuffer: [Token] = []
@@ -35,11 +39,19 @@ public actor LLMCore {
     private var currentTokenCount: Int32 = 0
     private var debugLastGeneratedTokens: [Token] = []
     
-    func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil) {
+    private var sampler: UnsafeMutablePointer<llama_sampler>?
+    
+    func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
         if let topK { self.topK = topK }
         if let topP { self.topP = topP }
         if let temp { self.temp = temp }
+        if let repeatPenalty { self.repeatPenalty = repeatPenalty }
+        if let repetitionLookback { self.repetitionLookback = repetitionLookback }
+        
+        if seed != nil || topK != nil || topP != nil || temp != nil || repeatPenalty != nil || repetitionLookback != nil {
+            recreateSampler()
+        }
     }
     
     func setStopSequence(_ sequence: String?) {
@@ -50,13 +62,30 @@ public actor LLMCore {
         }
     }
     
-    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, maxTokenCount: Int) throws {
+    private func recreateSampler() {
+        if let sampler {
+            llama_sampler_free(sampler)
+        }
+        
+        let samplerParams = llama_sampler_chain_default_params()
+        sampler = llama_sampler_chain_init(samplerParams)
+        
+        llama_sampler_chain_add(sampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
+    }
+    
+    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
         self.topK = topK
         self.topP = topP
         self.temp = temp
+        self.repeatPenalty = repeatPenalty
+        self.repetitionLookback = repetitionLookback
         self.maxTokenCount = maxTokenCount
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
         
@@ -74,11 +103,16 @@ public actor LLMCore {
         self.context = context
         
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
+        
+        recreateSampler()
     }
     
     deinit {
         llama_batch_free(batch)
         llama_free(context)
+        if let sampler {
+            llama_sampler_free(sampler)
+        }
     }
     
     
@@ -169,17 +203,11 @@ public actor LLMCore {
             return endToken
         }
         
-        let samplerParams = llama_sampler_chain_default_params()
-        let sampler = llama_sampler_chain_init(samplerParams)
-        defer { llama_sampler_free(sampler) }
-        
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
+        guard let sampler = sampler else { return endToken }
         
         let i = batch.n_tokens - 1
         let token = llama_sampler_sample(sampler, context, i)
+        llama_sampler_accept(sampler, token)
         
         tokenBuffer.append(token)
         
@@ -212,6 +240,8 @@ public actor LLMCore {
         return AsyncStream<String> { continuation in
             Task {
                 guard prepareContext(for: input) else { return continuation.finish() }
+                if let sampler { llama_sampler_reset(sampler) }
+                
                 while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                     let token = predictNextToken()
                     guard token != endToken else { return continuation.finish() }
@@ -288,6 +318,8 @@ public actor LLMCore {
         debugLastGeneratedTokens = []
         guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
         guard let parsedSchema = parseJSONSchema(jsonSchema) else { throw LLMError.contextCreationFailed }
+        if let sampler { llama_sampler_reset(sampler) }
+        
         var output = ""
         
         try addToken("{", to: &output)
@@ -361,6 +393,9 @@ public actor LLMCore {
     
     
     private func addToken(_ token: Token, to output: inout String) throws {
+        if let sampler {
+            llama_sampler_accept(sampler, token)
+        }
         clearBatch()
         addToBatch(token: token, pos: currentTokenCount)
         guard llama_decode(context, batch) == 0 else {
@@ -419,8 +454,6 @@ public actor LLMCore {
         
         let maxTokens = 128
         var tokensInString: [Token] = []
-        let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
-        
         var hasContent = false
         
         let (stringTokens, leadingWhitespaceTokens) = tokenSets
@@ -428,6 +461,9 @@ public actor LLMCore {
         
         while tokensInString.count < maxTokens {
             var allowedTokens = stringTokens
+            if hasContent {
+                allowedTokens.insert(quoteToken)
+            }
             if !hasContent || output.last == " " {
                 allowedTokens.subtract(leadingWhitespaceTokens)
             }
@@ -446,7 +482,6 @@ public actor LLMCore {
             if !hasContent && !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
                 hasContent = true
                 allowedTokens.formUnion(leadingWhitespaceTokens)
-                allowedTokens.insert(quoteToken)
             }
             
             if tokensInString.hasThreeSameElementsAtTheEnd {
@@ -555,7 +590,7 @@ public actor LLMCore {
                 allowedTokens = terminators.union([dotToken])
             } else if generatedString.contains(".") {
                 allowedTokens = digitTokens.union(terminators)
-            } else { // integer part, e.g. "12", "-34"
+            } else {
                 allowedTokens = digitTokens.union(terminators).union([dotToken])
             }
 
@@ -812,34 +847,34 @@ public actor LLMCore {
         guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else {
             return endToken
         }
+        guard let sampler, !allowedTokens.isEmpty else { return endToken }
         
-        let samplerParams = llama_sampler_chain_default_params()
-        let sampler = llama_sampler_chain_init(samplerParams)
-        defer { llama_sampler_free(sampler) }
+        let protectedTokens = [quoteToken, endToken, whitespaceToken]
+        var protectedLogits: [Float] = []
         
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
-        
-        let i = batch.n_tokens - 1
-        let token = llama_sampler_sample(sampler, context, i)
-        
-        if allowedTokens.isEmpty { return token }
-        
-        return allowedTokens.contains(token) ? token : findBestAllowedToken(allowedTokens: allowedTokens)
-    }
-    
-    private func findBestAllowedToken(allowedTokens: Set<Token>) -> Token {
-        guard !allowedTokens.isEmpty else { return endToken }
-        
-        if allowedTokens.count == 1 {
-            return allowedTokens.first!
+        if let logits = llama_get_logits(context) {
+            for token in protectedTokens {
+                protectedLogits.append(logits[Int(token)])
+            }
+            
+            for t in 0..<totalTokenCount {
+                let token = Token(t)
+                if !allowedTokens.contains(token) {
+                    logits[t] = -Float.infinity
+                }
+            }
         }
+
+        let i = batch.n_tokens - 1
+        _ = llama_sampler_sample(sampler, context, i)
         
-        let logits = llama_get_logits(context)!
-        
-        return allowedTokens.max { logits[Int($0)] < logits[Int($1)] } ?? allowedTokens.first!
+        if let logits = llama_get_logits(context) {
+            for (index, token) in protectedTokens.enumerated() {
+                logits[Int(token)] = protectedLogits[index]
+            }
+        }
+        let token = llama_sampler_sample(sampler, context, i)
+        return token
     }
     
     private func isValidJSON(_ text: String) -> Bool {
@@ -960,6 +995,18 @@ open class LLM: ObservableObject {
             Task { await core.setParameters(temp: temp) }
         }
     }
+
+    public var repeatPenalty: Float {
+        didSet {
+            Task { await core.setParameters(repeatPenalty: repeatPenalty) }
+        }
+    }
+    
+    public var repetitionLookback: Int32 {
+        didSet {
+            Task { await core.setParameters(repetitionLookback: repetitionLookback) }
+        }
+    }
     
     public var historyLimit: Int
     public var path: [CChar]
@@ -986,6 +1033,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
@@ -997,6 +1046,8 @@ open class LLM: ObservableObject {
         self.temp = temp
         self.historyLimit = historyLimit
         self.history = history
+        self.repeatPenalty = repeatPenalty
+        self.repetitionLookback = repetitionLookback
         
         #if DEBUG
         print("GNERATING WITH SEEED: \(seed)")
@@ -1020,6 +1071,8 @@ open class LLM: ObservableObject {
                 topK: topK,
                 topP: topP,
                 temp: temp,
+                repeatPenalty: repeatPenalty,
+                repetitionLookback: repetitionLookback,
                 maxTokenCount: finalMaxTokenCount
             )
             
@@ -1042,6 +1095,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
@@ -1053,6 +1108,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
@@ -1066,6 +1123,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
@@ -1077,6 +1136,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
@@ -1093,6 +1154,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048,
         updateProgress: @Sendable @escaping (Double) -> Void = { print(String(format: "downloaded(%.2f%%)", $0 * 100)) }
@@ -1108,6 +1171,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
