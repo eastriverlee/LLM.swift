@@ -292,28 +292,16 @@ public actor LLMCore {
         
         try addToken("{", to: &output)
         
-        for (index, field) in parsedSchema.requiredFields.enumerated() {
+        guard let originalSchema = try JSONSerialization.jsonObject(with: jsonSchema.data(using: .utf8)!) as? [String: Any] else {
+            throw LLMError.contextCreationFailed
+        }
+        
+        for (index, field) in parsedSchema.fields.enumerated() {
             try addToken("\"\(field.name)\":", to: &output)
             
-            switch field.type {
-            case .string(let allowedValues):
-                try generateStringValue(into: &output, allowedValues: allowedValues)
-            case .integer:
-                try generateIntegerValue(into: &output)
-            case .number:
-                try generateFloatingPointValue(into: &output)
-            case .boolean:
-                try generateBooleanValue(into: &output)
-            case .array(let itemType):
-                let fieldSchema = findFieldSchemaInOriginal(field.name, originalSchema: jsonSchema)
-                let itemSchema = fieldSchema?["items"] as? [String: Any]
-                try generateArrayValue(into: &output, ofType: itemType, withItemSchema: itemSchema)
-            case .object:
-                let fieldSchema = findFieldSchemaInOriginal(field.name, originalSchema: jsonSchema)
-                try generateObjectValue(into: &output, with: fieldSchema)
-            }
+            try generateValueForField(field, into: &output, originalSchema: originalSchema, allowNull: !field.required)
             
-            if index < parsedSchema.requiredFields.count - 1 {
+            if index < parsedSchema.fields.count - 1 {
                 try addToken(",", to: &output)
             }
         }
@@ -322,6 +310,56 @@ public actor LLMCore {
         
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    
+    private func getValueStartTokensForField(_ field: SchemaField) -> Set<Token> {
+        switch field.type {
+        case .string:
+            return Set([encode("\"", shouldAddBOS: false, special: false).first!])
+        case .integer, .number:
+            return Set("0123456789-".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        case .boolean:
+            let trueToken = encode("true", shouldAddBOS: false, special: false).first!
+            let falseToken = encode("false", shouldAddBOS: false, special: false).first!
+            return Set([trueToken, falseToken])
+        case .array:
+            return Set([encode("[", shouldAddBOS: false, special: false).first!])
+        case .object:
+            return Set([encode("{", shouldAddBOS: false, special: false).first!])
+        }
+    }
+    
+    private func generateValueForField(_ field: SchemaField, into output: inout String, originalSchema: [String: Any], allowNull: Bool = false) throws {
+        if allowNull {
+            let nullToken = encode("null", shouldAddBOS: false, special: false).first!
+            let valueStartTokens = getValueStartTokensForField(field)
+            let allowedTokens = valueStartTokens.union([nullToken])
+            let decision = sampleNextToken(from: allowedTokens)
+            
+            if decision == nullToken {
+                try addToken("null", to: &output)
+                return
+            }
+        }
+        
+        switch field.type {
+        case .string(let allowedValues):
+            try generateStringValue(into: &output, allowedValues: allowedValues)
+        case .integer:
+            try generateIntegerValue(into: &output)
+        case .number:
+            try generateFloatingPointValue(into: &output)
+        case .boolean:
+            try generateBooleanValue(into: &output)
+        case .array(let itemType):
+            let fieldSchema = findFieldSchema(field.name, in: originalSchema)
+            let itemSchema = fieldSchema?["items"] as? [String: Any]
+            try generateArrayValue(into: &output, ofType: itemType, withItemSchema: itemSchema)
+        case .object:
+            let fieldSchema = findFieldSchema(field.name, in: originalSchema)
+            try generateObjectValue(into: &output, with: fieldSchema)
+        }
+    }
+    
     
     private func addToken(_ token: Token, to output: inout String) throws {
         clearBatch()
@@ -606,6 +644,14 @@ public actor LLMCore {
         guard let schemaData = originalSchema.data(using: .utf8),
               let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
               let properties = schema["properties"] as? [String: Any],
+              let fieldSchema = properties[fieldName] as? [String: Any] else {
+            return nil
+        }
+        return fieldSchema
+    }
+    
+    private func findFieldSchema(_ fieldName: String, in originalSchema: [String: Any]) -> [String: Any]? {
+        guard let properties = originalSchema["properties"] as? [String: Any],
               let fieldSchema = properties[fieldName] as? [String: Any] else {
             return nil
         }

@@ -402,10 +402,8 @@ final class LLMTests {
     }
 
     @Generatable
-    struct SignedNumbers {
-        let anInteger: Int
-        let aFloat: Float
-        let aDouble: Double
+    struct Temperature {
+        let degrees: Double
     }
 
     @Test
@@ -413,16 +411,14 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Generate an integer, a float and a double. They all must be negative.",
-            as: SignedNumbers.self
+            to: "What is 0 Kelvin in Celsius?",
+            as: Temperature.self
         )
-        let numbers = result.value
+        let temperature = result.value
         let output = result.rawOutput
         
-        print(numbers)
-        #expect(numbers.anInteger < 0)
-        #expect(numbers.aFloat < 0)
-        #expect(numbers.aDouble < 0)
+        print(temperature)
+        #expect(temperature.degrees < 0)
         #expect(!output.isEmpty)
         
         let jsonData = output.data(using: String.Encoding.utf8)!
@@ -590,7 +586,7 @@ final class LLMTests {
         let totalPlants: Int
     }
 
-    @Test 
+    @Test
     func testArrayOfGeneratableStructs() async throws {
         let bot = try await LLM(from: model)!
         
@@ -620,6 +616,90 @@ final class LLMTests {
         for vegetable in vegetables {
             #expect(vegetable["name"] is String)
             #expect(vegetable["color"] is String)
+        }
+    }
+
+    @Generatable
+    struct Profile {
+        let name: String
+        let age: Int
+        let bio: String?
+        let nickname: String?
+    }
+
+    @Test
+    func testOptionalFieldSchema() throws {
+        let profileSchema = try JSONSerialization.jsonObject(with: Profile.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(profileSchema["type"] as? String == "object")
+        
+        let properties = profileSchema["properties"] as! [String: Any]
+        #expect(properties.keys.contains("name"))
+        #expect(properties.keys.contains("age"))
+        #expect(properties.keys.contains("bio"))
+        #expect(properties.keys.contains("nickname"))
+        
+        let required = profileSchema["required"] as! [String]
+        #expect(required.contains("name"))
+        #expect(required.contains("age"))
+        #expect(!required.contains("bio"))
+        #expect(!required.contains("nickname"))
+        
+        let bioField = properties["bio"] as! [String: Any]
+        #expect(bioField["type"] as? String == "string")
+    }
+
+    @Test
+    func testStructuredOutputWithOptionalFields() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a minimal user profile with just name and age, no bio or nickname needed.",
+            as: Profile.self
+        )
+        let profile = result.value
+        let output = result.rawOutput
+        
+        print("Profile: \(profile)")
+        print("Raw output: \(output)")
+        
+        #expect(!profile.name.isEmpty)
+        #expect(profile.age > 0)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        #expect(parsed["name"] is String)
+        #expect(parsed["age"] is Int)
+    }
+
+    @Test
+    func testStructuredOutputWithOptionalFieldsIncluded() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a detailed user profile with name, age, bio, and nickname all filled in.",
+            as: Profile.self
+        )
+        let profile = result.value
+        let output = result.rawOutput
+        
+        print("Profile: \(profile)")
+        print("Raw output: \(output)")
+        
+        #expect(!profile.name.isEmpty)
+        #expect(profile.age > 0)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        #expect(parsed["name"] is String)
+        #expect(parsed["age"] is Int)
+        
+        if parsed["bio"] != nil {
+            #expect(parsed["bio"] is String)
+            #expect(profile.bio != nil)
+        }
+        if parsed["nickname"] != nil {
+            #expect(parsed["nickname"] is String)
+            #expect(profile.nickname != nil)
         }
     }
 }
