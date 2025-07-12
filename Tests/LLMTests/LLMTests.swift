@@ -411,7 +411,7 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "What is 0 Kelvin in Celsius?",
+            to: "Generate a temperature that is below freezing point. It should be negative (less than 0).",
             as: Temperature.self
         )
         let temperature = result.value

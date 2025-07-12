@@ -1192,9 +1192,10 @@ open class LLM: ObservableObject {
         Matches this exact schema: \(T.jsonSchema)
         Return only the JSON object, no other text.
         """
+        let processedPrompt = preprocess(schemaPrompt, history)
         
         let rawOutput = try await core.generateWithConstraints(
-            from: schemaPrompt,
+            from: processedPrompt,
             jsonSchema: T.jsonSchema
         )
         
@@ -1204,7 +1205,14 @@ open class LLM: ObservableObject {
         
         do {
             let decodedValue = try JSONDecoder().decode(T.self, from: jsonData)
-            return StructuredOutput(value: decodedValue, rawOutput: rawOutput)
+            let output = StructuredOutput(value: decodedValue, rawOutput: rawOutput)
+            history += [(.user, processedPrompt), (.bot, rawOutput)]
+            let historyCount = history.count
+            if historyLimit < historyCount {
+                history.removeFirst(min(2, historyCount))
+            }
+            postprocess(rawOutput)
+            return output
         } catch {
             print("JSON Decoding failed:")
             print("Raw output: '\(rawOutput)'")
