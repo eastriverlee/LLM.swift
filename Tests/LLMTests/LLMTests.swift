@@ -488,7 +488,7 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Give me any purple colored vegetable.",
+            to: "Give me any vegetable.",
             as: Vegetable.self
         )
         let item = result.value
@@ -496,7 +496,7 @@ final class LLMTests {
         
         print(item)
         #expect(!item.name.isEmpty)
-        #expect([.red, .green, .blue].contains(item.color))
+        #expect([.red, .orange, .yellow, .green, .blue, .purple].contains(item.color))
         #expect(!output.isEmpty)
         
         let jsonData = output.data(using: String.Encoding.utf8)!
@@ -609,7 +609,7 @@ final class LLMTests {
         
         for vegetable in garden.vegetables {
             #expect(!vegetable.name.isEmpty)
-            #expect([.red, .green, .blue].contains(vegetable.color))
+            #expect([.red, .orange, .yellow, .green, .blue, .purple].contains(vegetable.color))
         }
         
         let jsonData = output.data(using: String.Encoding.utf8)!

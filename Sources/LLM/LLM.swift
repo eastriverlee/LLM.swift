@@ -311,8 +311,6 @@ public actor LLMCore {
             case .object:
                 let fieldSchema = findFieldSchemaInOriginal(field.name, originalSchema: jsonSchema)
                 try generateObjectValue(into: &output, with: fieldSchema)
-            default:
-                try addToken("null", to: &output)
             }
             
             if index < parsedSchema.requiredFields.count - 1 {
@@ -346,13 +344,7 @@ public actor LLMCore {
     
     private func generateStringValue(into output: inout String, allowedValues: [String]? = nil) throws {
         if let allowedValues, !allowedValues.isEmpty {
-            let value = allowedValues.first!
-            try addToken("\"", to: &output)
-            let tokens = encode(value, shouldAddBOS: false, special: false)
-            for token in tokens {
-                try addToken(token, to: &output)
-            }
-            try addToken("\"", to: &output)
+            try generateConstrainedString(into: &output, allowedValues: allowedValues)
             return
         }
 
@@ -398,6 +390,41 @@ public actor LLMCore {
         }
     }
     
+    private func generateConstrainedString(into output: inout String, allowedValues: [String]) throws {
+        try addToken("\"", to: &output)
+        
+        var currentTokens: [Token] = []
+        var candidateValues = allowedValues
+        
+        while !candidateValues.isEmpty {
+            let possibleNextTokens = Set(candidateValues.flatMap { value in
+                let fullTokens = encode(value, shouldAddBOS: false, special: false)
+                return currentTokens.count < fullTokens.count ? [fullTokens[currentTokens.count]] : []
+            })
+            
+            let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
+            let allowedTokens = possibleNextTokens.union([quoteToken])
+            
+            let nextToken = sampleNextToken(from: allowedTokens)
+            
+            if nextToken == quoteToken {
+                try addToken(nextToken, to: &output)
+                return
+            }
+            
+            currentTokens.append(nextToken)
+            try addToken(nextToken, to: &output)
+            
+            candidateValues = candidateValues.filter { value in
+                let valueTokens = encode(value, shouldAddBOS: false, special: false)
+                return currentTokens.count <= valueTokens.count && 
+                       Array(valueTokens.prefix(currentTokens.count)) == currentTokens
+            }
+        }
+        
+        try addToken("\"", to: &output)
+    }
+    
     private func generateIntegerValue(into output: inout String) throws {
         let maxLength = 19
         var generatedString = ""
@@ -418,7 +445,7 @@ public actor LLMCore {
                 allowedTokens = digitTokens
             } else if generatedString == "0" || generatedString == "-0" {
                 allowedTokens = terminators
-            } else { // is a number like "12", "-34"
+            } else {
                 allowedTokens = digitTokens.union(terminators)
             }
 
