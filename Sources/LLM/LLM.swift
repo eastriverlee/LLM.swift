@@ -305,7 +305,6 @@ public actor LLMCore {
                 try addToken(",", to: &output)
             }
         }
-        
         try addToken("}", to: &output)
         
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -379,6 +378,36 @@ public actor LLMCore {
             try addToken(token, to: &output)
         }
     }
+
+        
+    private var _tokenSets: (stringTokens: Set<Token>, leadingWhitespaceTokens: Set<Token>)?
+    private var tokenSets: (stringTokens: Set<Token>, leadingWhitespaceTokens: Set<Token>) {
+        get {
+            if let _tokenSets {
+                return _tokenSets
+            }
+
+            var stringTokens: Set<Token> = []
+            var leadingWhitespaceTokens: Set<Token> = []
+            
+            for i in 0..<totalTokenCount {
+                let token = Token(i)
+                let decoded = decode(token)
+                if decoded.isEmpty || decoded.filter({$0 != " "}).contains(where: {$0 == "\"" || $0.isWhitespace || !$0.isASCII && !$0.isLowercase && !$0.isNumber && !$0.isUppercase}) { continue }
+                if let firstChar = decoded.first, firstChar == " " {
+                    leadingWhitespaceTokens.insert(token)
+                }
+
+                if let firstChar = decoded.first, firstChar.isLetterOrSpace && decoded.count < 10  {
+                    stringTokens.insert(token)
+                }
+            }
+            
+            let newSets = (stringTokens, leadingWhitespaceTokens)
+            self._tokenSets = newSets
+            return newSets
+        }
+    }
     
     private func generateStringValue(into output: inout String, allowedValues: [String]? = nil) throws {
         if let allowedValues, !allowedValues.isEmpty {
@@ -388,44 +417,43 @@ public actor LLMCore {
 
         try addToken("\"", to: &output)
         
-        let maxTokens = 32
+        let maxTokens = 128
         var tokensInString: [Token] = []
         let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
         
         var hasContent = false
         
+        let (stringTokens, leadingWhitespaceTokens) = tokenSets
+        
+        
         while tokensInString.count < maxTokens {
-            var allowedTokens = getStringTokensForField()
-            if hasContent {
-                allowedTokens.insert(quoteToken)
-            } else {
-                allowedTokens.remove(encode(" ", shouldAddBOS: false, special: false).first!)
+            var allowedTokens = stringTokens
+            if !hasContent || output.last == " " {
+                allowedTokens.subtract(leadingWhitespaceTokens)
             }
             
             let predictedToken = sampleNextToken(from: allowedTokens)
             guard predictedToken != endToken else { break }
             
             if predictedToken == quoteToken {
-                try addToken(predictedToken, to: &output)
-                return
+                break
             }
             
             try addToken(predictedToken, to: &output)
             let decoded = decode(predictedToken)
             tokensInString.append(predictedToken)
             
-            if !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
+            if !hasContent && !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
                 hasContent = true
+                allowedTokens.formUnion(leadingWhitespaceTokens)
+                allowedTokens.insert(quoteToken)
             }
             
-            if tokensInString.count > 2 && tokensInString.last == tokensInString[tokensInString.count - 2] {
+            if tokensInString.hasThreeSameElementsAtTheEnd {
                 break
             }
         }
-        
-        if !output.hasSuffix("\"") {
-            try addToken("\"", to: &output)
-        }
+        try addToken("\"", to: &output)
     }
     
     private func generateConstrainedString(into output: inout String, allowedValues: [String]) throws {
@@ -505,7 +533,7 @@ public actor LLMCore {
     }
     
     private func generateFloatingPointValue(into output: inout String) throws {
-        let maxLength = 10
+        let maxLength = 32
         var generatedString = ""
         let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
         let minusToken = encode("-", shouldAddBOS: false, special: false).first!
@@ -726,26 +754,6 @@ public actor LLMCore {
         let requiredFields: [SchemaField]
     }
     
-    private func getStringTokensForField() -> Set<Token> {
-        var tokens: Set<Token> = []
-        
-        for i in 0..<totalTokenCount {
-            let token = Token(i)
-            let decoded = decode(token)
-            
-            if !decoded.isEmpty && decoded.count <= 10 && decoded.allSatisfy({ char in
-                let ascii = char.asciiValue ?? 0
-                return ascii >= 32 && ascii <= 126 &&
-                (char.isLetter || char == " " ||
-                 ".-_'".contains(char))
-            }) && !decoded.contains(where: { $0.isNumber }) {
-                tokens.insert(token)
-            }
-        }
-        
-        return tokens
-    }
-    
     private func parseJSONSchema(_ schemaString: String) -> ParsedSchema? {
         guard let schemaData = schemaString.data(using: .utf8),
               let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
@@ -753,11 +761,13 @@ public actor LLMCore {
             return nil
         }
         
+        let fieldNames = schema["ordered_keys"] as? [String] ?? properties.keys.sorted()
+        
         let required = schema["required"] as? [String] ?? []
         var fields: [SchemaField] = []
         
-        for (fieldName, fieldData) in properties {
-            guard let fieldInfo = fieldData as? [String: Any] else { continue }
+        for fieldName in fieldNames {
+            guard let fieldInfo = properties[fieldName] as? [String: Any] else { continue }
             
             let fieldType: JSONFieldType
             if let enumValues = fieldInfo["enum"] as? [String] {
@@ -821,9 +831,8 @@ public actor LLMCore {
     }
     
     private func findBestAllowedToken(allowedTokens: Set<Token>) -> Token {
-        guard !allowedTokens.isEmpty else { return Token(32) }
+        guard !allowedTokens.isEmpty else { return endToken }
         
-        // If there's only one token, return it directly
         if allowedTokens.count == 1 {
             return allowedTokens.first!
         }
@@ -989,10 +998,13 @@ open class LLM: ObservableObject {
         self.historyLimit = historyLimit
         self.history = history
         
+        #if DEBUG
+        print("GNERATING WITH SEEED: \(seed)")
+        #endif
         var modelParams = llama_model_default_params()
-#if targetEnvironment(simulator)
+        #if targetEnvironment(simulator)
         modelParams.n_gpu_layers = 0
-#endif
+        #endif
         guard let model = llama_model_load_from_file(self.path, modelParams) else {
             return nil
         }
@@ -1482,3 +1494,14 @@ extension [String] {
     }
 }
 
+extension Array where Element: Equatable {
+    var hasThreeSameElementsAtTheEnd: Bool {
+        count >= 3 && self[count - 3] == self[count - 2] && self[count - 2] == self[count - 1]
+    }
+}
+
+extension Character {
+    var isLetterOrSpace: Bool {
+        isLetter || self == " "
+    }
+}

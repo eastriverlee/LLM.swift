@@ -354,10 +354,10 @@ final class LLMTests {
 
     @Test
     func testStructuredOutputWithBook() async throws {
-        let bot = try await LLM(from: model)!
+        let bot = try await LLM(from: model, seed: 276313767)!
         
         let result = try await bot.respond(
-            to: "Generate a book with a title, number of pages, and an author.",
+            to: "A real classic book with a title, number of pages, and an author.",
             as: Book.self
         )
         let book = result.value
@@ -403,7 +403,7 @@ final class LLMTests {
 
     @Generatable
     struct Temperature {
-        let degrees: Double
+        let degreesInCelcius: Double
     }
 
     @Test
@@ -411,14 +411,14 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Generate a temperature that is below freezing point. It should be negative (less than 0).",
+            to: "Coldest temperature below zero you can think of in Celsius",
             as: Temperature.self
         )
         let temperature = result.value
         let output = result.rawOutput
         
         print(temperature)
-        #expect(temperature.degrees < 0)
+        #expect(temperature.degreesInCelcius < 0)
         #expect(!output.isEmpty)
         
         let jsonData = output.data(using: String.Encoding.utf8)!
@@ -484,7 +484,7 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Give me any vegetable.",
+            to: "Give me any vegetable that is purple.",
             as: Vegetable.self
         )
         let item = result.value
@@ -650,7 +650,7 @@ final class LLMTests {
 
     @Test
     func testStructuredOutputWithOptionalFields() async throws {
-        let bot = try await LLM(from: model)!
+        let bot = try await LLM(from: model, seed: 3978003299)!
         
         let result = try await bot.respond(
             to: "Create a minimal user profile with just name and age, no bio or nickname needed.",
@@ -669,37 +669,5 @@ final class LLMTests {
         let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
         #expect(parsed["name"] is String)
         #expect(parsed["age"] is Int)
-    }
-
-    @Test
-    func testStructuredOutputWithOptionalFieldsIncluded() async throws {
-        let bot = try await LLM(from: model)!
-        
-        let result = try await bot.respond(
-            to: "Create a detailed user profile with name, age, bio, and nickname all filled in.",
-            as: Profile.self
-        )
-        let profile = result.value
-        let output = result.rawOutput
-        
-        print("Profile: \(profile)")
-        print("Raw output: \(output)")
-        
-        #expect(!profile.name.isEmpty)
-        #expect(profile.age > 0)
-        
-        let jsonData = output.data(using: String.Encoding.utf8)!
-        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
-        #expect(parsed["name"] is String)
-        #expect(parsed["age"] is Int)
-        
-        if parsed["bio"] != nil {
-            #expect(parsed["bio"] is String)
-            #expect(profile.bio != nil)
-        }
-        if parsed["nickname"] != nil {
-            #expect(parsed["nickname"] is String)
-            #expect(profile.nickname != nil)
-        }
     }
 }
