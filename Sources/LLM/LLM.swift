@@ -305,7 +305,12 @@ public actor LLMCore {
             case .boolean:
                 try generateBooleanValue(into: &output)
             case .array(let itemType):
-                try generateArrayValue(into: &output, ofType: itemType)
+                let fieldSchema = findFieldSchemaInOriginal(field.name, originalSchema: jsonSchema)
+                let itemSchema = fieldSchema?["items"] as? [String: Any]
+                try generateArrayValue(into: &output, ofType: itemType, withItemSchema: itemSchema)
+            case .object:
+                let fieldSchema = findFieldSchemaInOriginal(field.name, originalSchema: jsonSchema)
+                try generateObjectValue(into: &output, with: fieldSchema)
             default:
                 try addToken("null", to: &output)
             }
@@ -500,7 +505,87 @@ public actor LLMCore {
         try addToken(predictedToken, to: &output)
     }
     
-    private func generateArrayValue(into output: inout String, ofType itemType: JSONFieldType) throws {
+    private func generateObjectValue(into output: inout String, with schema: [String: Any]? = nil) throws {
+        try addToken("{", to: &output)
+        
+        guard let schema = schema,
+              let properties = schema["properties"] as? [String: Any],
+              let required = schema["required"] as? [String] else {
+            try addToken("}", to: &output)
+            return
+        }
+        
+        for (index, fieldName) in required.enumerated() {
+            guard let fieldInfo = properties[fieldName] as? [String: Any] else { continue }
+            
+            try addToken("\"\(fieldName)\":", to: &output)
+            try generateValueForFieldInfo(fieldInfo, into: &output)
+            
+            if index < required.count - 1 {
+                try addToken(",", to: &output)
+            }
+        }
+        
+        try addToken("}", to: &output)
+    }
+    
+    private func generateValueForFieldInfo(_ fieldInfo: [String: Any], into output: inout String) throws {
+        if let enumValues = fieldInfo["enum"] as? [String] {
+            try generateStringValue(into: &output, allowedValues: enumValues)
+            return
+        }
+        
+        let typeString = fieldInfo["type"] as? String ?? ""
+        switch typeString {
+        case "string":
+            try generateStringValue(into: &output, allowedValues: nil)
+        case "integer":
+            try generateIntegerValue(into: &output)
+        case "number":
+            try generateFloatingPointValue(into: &output)
+        case "boolean":
+            try generateBooleanValue(into: &output)
+        case "object":
+            try generateObjectValue(into: &output, with: fieldInfo)
+        case "array":
+            if let items = fieldInfo["items"] as? [String: Any] {
+                let itemType = parseItemType(from: items)
+                try generateArrayValue(into: &output, ofType: itemType, withItemSchema: items)
+            } else {
+                try addToken("[]", to: &output)
+            }
+        default:
+            try addToken("null", to: &output)
+        }
+    }
+    
+    private func parseItemType(from items: [String: Any]) -> JSONFieldType {
+        if let enumValues = items["enum"] as? [String] {
+            return .string(allowedValues: enumValues)
+        }
+        
+        let itemTypeString = items["type"] as? String ?? ""
+        switch itemTypeString {
+        case "string": return .string(allowedValues: nil)
+        case "integer": return .integer
+        case "number": return .number
+        case "boolean": return .boolean
+        case "object": return .object
+        default: return .string(allowedValues: nil)
+        }
+    }
+    
+    private func findFieldSchemaInOriginal(_ fieldName: String, originalSchema: String) -> [String: Any]? {
+        guard let schemaData = originalSchema.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
+              let properties = schema["properties"] as? [String: Any],
+              let fieldSchema = properties[fieldName] as? [String: Any] else {
+            return nil
+        }
+        return fieldSchema
+    }
+    
+    private func generateArrayValue(into output: inout String, ofType itemType: JSONFieldType, withItemSchema itemSchema: [String: Any]? = nil) throws {
         try addToken("[", to: &output)
         
         let maxItems = 5
@@ -519,6 +604,8 @@ public actor LLMCore {
                 try generateFloatingPointValue(into: &output)
             case .boolean:
                 try generateBooleanValue(into: &output)
+            case .object:
+                try generateObjectValue(into: &output, with: itemSchema)
             default:
                 break
             }
@@ -611,12 +698,18 @@ public actor LLMCore {
                 case "boolean": fieldType = .boolean
                 case "object": fieldType = .object
                 case "array":
-                    guard let items = fieldInfo["items"] as? [String: String],
-                          let itemTypeString = items["type"] else { continue }
+                    guard let items = fieldInfo["items"] as? [String: Any],
+                          let itemTypeString = items["type"] as? String else { continue }
                     switch itemTypeString {
-                    case "string": fieldType = .array(itemType: .string(allowedValues: nil))
+                    case "string": 
+                        if let enumValues = items["enum"] as? [String] {
+                            fieldType = .array(itemType: .string(allowedValues: enumValues))
+                        } else {
+                            fieldType = .array(itemType: .string(allowedValues: nil))
+                        }
                     case "integer": fieldType = .array(itemType: .integer)
                     case "number": fieldType = .array(itemType: .number)
+                    case "object": fieldType = .array(itemType: .object)
                     case "boolean": fieldType = .array(itemType: .boolean)
                     default: continue
                     }

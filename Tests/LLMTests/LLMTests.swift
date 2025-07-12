@@ -458,8 +458,11 @@ final class LLMTests {
     @Generatable
     enum Color {
         case red
+        case orange
+        case yellow
         case green
         case blue
+        case purple
     }
 
     @Generatable
@@ -477,7 +480,7 @@ final class LLMTests {
         print("properties keys: \(properties.keys)")
         let color = properties["color"] as! [String: Any]
         print("color: \(color)")
-        #expect(color["enum"] as? [String] == ["red", "green", "blue"])
+        #expect(color["enum"] as? [String] == Color.allCases.map{"\($0)"})
     }
     
     @Test
@@ -485,7 +488,7 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
-            to: "Give me any vegetable.",
+            to: "Give me any purple colored vegetable.",
             as: Vegetable.self
         )
         let item = result.value
@@ -499,5 +502,124 @@ final class LLMTests {
         let jsonData = output.data(using: String.Encoding.utf8)!
         let parsed = try JSONSerialization.jsonObject(with: jsonData)
         #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Location {
+        let latitude: Double
+        let longitude: Double
+    }
+
+    @Generatable 
+    struct Restaurant {
+        let name: String
+        let cuisine: String
+        let location: Location
+    }
+
+    @Test
+    func testNestedGeneratableSchemas() throws {
+        // Test Location schema
+        let locationSchema = try JSONSerialization.jsonObject(with: Location.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(locationSchema["type"] as? String == "object")
+        let locationProps = locationSchema["properties"] as! [String: Any]
+        #expect(locationProps.keys.contains("latitude"))
+        #expect(locationProps.keys.contains("longitude"))
+        let latType = locationProps["latitude"] as! [String: Any]
+        #expect(latType["type"] as? String == "number")
+        
+        // Test Restaurant schema  
+        let restaurantSchema = try JSONSerialization.jsonObject(with: Restaurant.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(restaurantSchema["type"] as? String == "object")
+        let restaurantProps = restaurantSchema["properties"] as! [String: Any]
+        #expect(restaurantProps.keys.contains("name"))
+        #expect(restaurantProps.keys.contains("cuisine"))
+        #expect(restaurantProps.keys.contains("location"))
+        
+        let locationProp = restaurantProps["location"] as! [String: Any]
+        #expect(locationProp["type"] as? String == "object")
+        let nestedProps = locationProp["properties"] as! [String: Any]
+        #expect(nestedProps.keys.contains("latitude"))
+        #expect(nestedProps.keys.contains("longitude"))
+        
+        // Test Garden schema
+        let gardenSchema = try JSONSerialization.jsonObject(with: Garden.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(gardenSchema["type"] as? String == "object")
+        let gardenProps = gardenSchema["properties"] as! [String: Any]
+        #expect(gardenProps.keys.contains("vegetables"))
+        #expect(gardenProps.keys.contains("totalPlants"))
+        
+        let vegetablesProp = gardenProps["vegetables"] as! [String: Any]
+        #expect(vegetablesProp["type"] as? String == "array")
+        let items = vegetablesProp["items"] as! [String: Any]
+        #expect(items["type"] as? String == "object")
+        let itemProps = items["properties"] as! [String: Any]
+        #expect(itemProps.keys.contains("name"))
+        #expect(itemProps.keys.contains("color"))
+    }
+    
+    @Test
+    func testNestedGeneratableStruct() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a restaurant with name, cuisine type, and location (latitude and longitude coordinates).",
+            as: Restaurant.self
+        )
+        let restaurant = result.value
+        let output = result.rawOutput
+        
+        print("Restaurant: \(restaurant)")
+        print("Raw output: \(output)")
+        
+        #expect(!restaurant.name.isEmpty)
+        #expect(!restaurant.cuisine.isEmpty)
+        #expect(restaurant.location.latitude >= -90 && restaurant.location.latitude <= 90)
+        #expect(restaurant.location.longitude >= -180 && restaurant.location.longitude <= 180)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let location = parsed["location"] as! [String: Any]
+        #expect(location["latitude"] is Double)
+        #expect(location["longitude"] is Double)
+    }
+
+    @Generatable
+    struct Garden {
+        let vegetables: [Vegetable]
+        let totalPlants: Int
+    }
+
+    @Test 
+    func testArrayOfGeneratableStructs() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a garden with 3 different vegetables (each with name and color of the vegetable)",
+            as: Garden.self
+        )
+        let garden = result.value
+        let output = result.rawOutput
+        
+        print("Garden: \(garden)")
+        print("Raw output: \(output)")
+        
+        #expect(garden.vegetables.count >= 1)
+        #expect(garden.totalPlants >= garden.vegetables.count)
+        
+        for vegetable in garden.vegetables {
+            #expect(!vegetable.name.isEmpty)
+            #expect([.red, .green, .blue].contains(vegetable.color))
+        }
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let vegetables = parsed["vegetables"] as! [[String: Any]]
+        #expect(vegetables.count >= 1)
+        
+        for vegetable in vegetables {
+            #expect(vegetable["name"] is String)
+            #expect(vegetable["color"] is String)
+        }
     }
 }
