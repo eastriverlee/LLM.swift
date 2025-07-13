@@ -176,7 +176,7 @@ The macro automatically:
 > Check `LLMTests.swift` for more comprehensive examples and use cases of `@Generatable`.
 
 ## Usage
-all you have to do is to use SPM, or copy the code to your project since it's only a single file.
+Add the package using SPM:
 ```swift
 dependencies: [
     .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "main"),
@@ -184,8 +184,9 @@ dependencies: [
 ```
 
 ## Overview
-`LLM.swift` is basically a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp) package, so that it stays as performant as possible while is always up to date. so theoretically, any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
-It's only a single file library, so you can copy, study and modify the code however you want.
+`LLM.swift` started as a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp), and has evolved into a comprehensive Swift library with advanced features like `@Generatable` that allows users to control LLMs programmatically. It stays as performant as possible while always being up to date—any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
+
+The core implementation is in `LLM.swift`, making it easy to understand and extend the library for your specific needs.
 
 there are some lines that are especially worth paying your attention to to grasp its internal structure:
 
