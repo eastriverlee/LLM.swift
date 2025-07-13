@@ -1,12 +1,28 @@
 import Foundation
 import llama
+@_exported import LLMMacros
 
+
+/// A token used by the language model.
 public typealias Token = llama_token
+
+/// A batch of tokens for processing.
 public typealias Batch = llama_batch
+
+/// A pointer to the underlying model.
 public typealias Model = OpaquePointer
+
+/// A pointer to the model's vocabulary.
 public typealias Vocab = OpaquePointer
+
+/// A chat message consisting of a role and content.
 public typealias Chat = (role: Role, content: String)
 
+/// Core actor responsible for thread-safe interactions with the llama.cpp library.
+///
+/// `LLMCore` handles low-level operations including token encoding/decoding,
+/// context management, and inference. It ensures thread safety by using Swift's
+/// actor isolation.
 public actor LLMCore {
     private let model: Model
     private let vocab: Vocab
@@ -18,12 +34,16 @@ public actor LLMCore {
     private(set) var topK: Int32
     private(set) var topP: Float
     private(set) var temp: Float
+    private(set) var repeatPenalty: Float
+    private(set) var repetitionLookback: Int32
     
     private let maxTokenCount: Int
     private let totalTokenCount: Int
     private lazy var newlineToken: Token = llama_vocab_nl(vocab)
     private lazy var endToken: Token = llama_vocab_eos(vocab)
     private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
+    private lazy var quoteToken: Token = encode("\"", shouldAddBOS: false, special: false).first!
+    private lazy var whitespaceToken: Token = encode(" ", shouldAddBOS: false, special: false).first!
     
     private var stopSequenceTokens: [Token]?
     private var tokenBuffer: [Token] = []
@@ -31,12 +51,21 @@ public actor LLMCore {
     
     private var shouldContinuePredicting = false
     private var currentTokenCount: Int32 = 0
+    private var debugLastGeneratedTokens: [Token] = []
     
-    func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil) {
+    private var sampler: UnsafeMutablePointer<llama_sampler>?
+    
+    func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
         if let topK { self.topK = topK }
         if let topP { self.topP = topP }
         if let temp { self.temp = temp }
+        if let repeatPenalty { self.repeatPenalty = repeatPenalty }
+        if let repetitionLookback { self.repetitionLookback = repetitionLookback }
+        
+        if seed != nil || topK != nil || topP != nil || temp != nil || repeatPenalty != nil || repetitionLookback != nil {
+            recreateSampler()
+        }
     }
     
     func setStopSequence(_ sequence: String?) {
@@ -47,13 +76,30 @@ public actor LLMCore {
         }
     }
     
-    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, maxTokenCount: Int) throws {
+    private func recreateSampler() {
+        if let sampler {
+            llama_sampler_free(sampler)
+        }
+        
+        let samplerParams = llama_sampler_chain_default_params()
+        sampler = llama_sampler_chain_init(samplerParams)
+        
+        llama_sampler_chain_add(sampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
+    }
+    
+    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
         self.topK = topK
         self.topP = topP
         self.temp = temp
+        self.repeatPenalty = repeatPenalty
+        self.repetitionLookback = repetitionLookback
         self.maxTokenCount = maxTokenCount
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
         
@@ -71,21 +117,26 @@ public actor LLMCore {
         self.context = context
         
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
+        
+        recreateSampler()
     }
     
     deinit {
         llama_batch_free(batch)
         llama_free(context)
+        if let sampler {
+            llama_sampler_free(sampler)
+        }
     }
     
     
-    public func encode(_ text: String, shouldAddBOS: Bool = true) -> [Token] {
+    public func encode(_ text: String, shouldAddBOS: Bool = true, special: Bool = true) -> [Token] {
         let count = Int32(text.cString(using: .utf8)!.count)
         var tokenCount = count + 1
         let cTokens = UnsafeMutablePointer<llama_token>.allocate(capacity: Int(tokenCount))
         defer { cTokens.deallocate() }
         
-        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, true)
+        tokenCount = llama_tokenize(vocab, text, count, cTokens, tokenCount, shouldAddBOS, special)
         let tokens = (0..<Int(tokenCount)).map { cTokens[$0] }
         return tokens
     }
@@ -105,12 +156,16 @@ public actor LLMCore {
             bufferLength = -actualLength
             buffer = .init(repeating: 0, count: bufferLength)
             actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
-        } else {
-            buffer = Array(buffer.prefix(actualLength))
+            guard actualLength > 0 else { return "" }
         }
         
-        let bytes = buffer.map { UInt8(bitPattern: $0) }
-        guard let decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
+        let validBuffer = Array(buffer.prefix(actualLength))
+        let bytes = validBuffer.map { UInt8(bitPattern: $0) }
+        guard var decoded = String(bytes: bytes, encoding: .utf8) else { return "" }
+        
+        if decoded.contains("\0") {
+            decoded = decoded.filter { $0 != "\0" }
+        }
         
         tokenDecodeCache.setObject(decoded as NSString, forKey: NSNumber(value: token))
         
@@ -158,21 +213,15 @@ public actor LLMCore {
     }
     
     func predictNextToken() -> Token {
-        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else { 
-            return endToken 
+        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else {
+            return endToken
         }
         
-        let samplerParams = llama_sampler_chain_default_params()
-        let sampler = llama_sampler_chain_init(samplerParams)
-        defer { llama_sampler_free(sampler) }
-        
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(seed))
+        guard let sampler = sampler else { return endToken }
         
         let i = batch.n_tokens - 1
         let token = llama_sampler_sample(sampler, context, i)
+        llama_sampler_accept(sampler, token)
         
         tokenBuffer.append(token)
         
@@ -205,6 +254,8 @@ public actor LLMCore {
         return AsyncStream<String> { continuation in
             Task {
                 guard prepareContext(for: input) else { return continuation.finish() }
+                if let sampler { llama_sampler_reset(sampler) }
+                
                 while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                     let token = predictNextToken()
                     guard token != endToken else { return continuation.finish() }
@@ -272,8 +323,595 @@ public actor LLMCore {
         
         return embeddingsArray
     }
+    
+    public func getLastGeneratedTokens() -> [Token] {
+        return debugLastGeneratedTokens
+    }
+    
+    func generateWithConstraints(from input: String, jsonSchema: String) throws -> String {
+        debugLastGeneratedTokens = []
+        guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
+        guard let parsedSchema = parseJSONSchema(jsonSchema) else { throw LLMError.contextCreationFailed }
+        if let sampler { llama_sampler_reset(sampler) }
+        
+        var output = ""
+        
+        try addToken("{", to: &output)
+        
+        guard let originalSchema = try JSONSerialization.jsonObject(with: jsonSchema.data(using: .utf8)!) as? [String: Any] else {
+            throw LLMError.contextCreationFailed
+        }
+        
+        for (index, field) in parsedSchema.fields.enumerated() {
+            try addToken("\"\(field.name)\":", to: &output)
+            
+            try generateValueForField(field, into: &output, originalSchema: originalSchema, allowNull: !field.required)
+            
+            if index < parsedSchema.fields.count - 1 {
+                try addToken(",", to: &output)
+            }
+        }
+        try addToken("}", to: &output)
+        
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private func getValueStartTokensForField(_ field: SchemaField) -> Set<Token> {
+        switch field.type {
+        case .string:
+            return Set([encode("\"", shouldAddBOS: false, special: false).first!])
+        case .integer, .number:
+            return Set("0123456789-".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        case .boolean:
+            let trueToken = encode("true", shouldAddBOS: false, special: false).first!
+            let falseToken = encode("false", shouldAddBOS: false, special: false).first!
+            return Set([trueToken, falseToken])
+        case .array:
+            return Set([encode("[", shouldAddBOS: false, special: false).first!])
+        case .object:
+            return Set([encode("{", shouldAddBOS: false, special: false).first!])
+        }
+    }
+    
+    private func generateValueForField(_ field: SchemaField, into output: inout String, originalSchema: [String: Any], allowNull: Bool = false) throws {
+        if allowNull {
+            let nullToken = encode("null", shouldAddBOS: false, special: false).first!
+            let valueStartTokens = getValueStartTokensForField(field)
+            let allowedTokens = valueStartTokens.union([nullToken])
+            let decision = sampleNextToken(from: allowedTokens)
+            
+            if decision == nullToken {
+                try addToken("null", to: &output)
+                return
+            }
+        }
+        
+        switch field.type {
+        case .string(let allowedValues):
+            try generateStringValue(into: &output, allowedValues: allowedValues)
+        case .integer:
+            try generateIntegerValue(into: &output)
+        case .number:
+            try generateFloatingPointValue(into: &output)
+        case .boolean:
+            try generateBooleanValue(into: &output)
+        case .array(let itemType):
+            let fieldSchema = findFieldSchema(field.name, in: originalSchema)
+            let itemSchema = fieldSchema?["items"] as? [String: Any]
+            try generateArrayValue(into: &output, ofType: itemType, withItemSchema: itemSchema)
+        case .object:
+            let fieldSchema = findFieldSchema(field.name, in: originalSchema)
+            try generateObjectValue(into: &output, with: fieldSchema)
+        }
+    }
+    
+    
+    private func addToken(_ token: Token, to output: inout String) throws {
+        if let sampler {
+            llama_sampler_accept(sampler, token)
+        }
+        clearBatch()
+        addToBatch(token: token, pos: currentTokenCount)
+        guard llama_decode(context, batch) == 0 else {
+            shouldContinuePredicting = false
+            throw LLMError.decodingFailed
+        }
+        currentTokenCount += 1
+        output += decode(token)
+        debugLastGeneratedTokens.append(token)
+    }
+    
+    private func addToken(_ string: String, to output: inout String) throws {
+        let tokens = encode(string, shouldAddBOS: false, special: false)
+        for token in tokens {
+            try addToken(token, to: &output)
+        }
+    }
+
+        
+    private var _tokenSets: (stringTokens: Set<Token>, leadingWhitespaceTokens: Set<Token>)?
+    private var tokenSets: (stringTokens: Set<Token>, leadingWhitespaceTokens: Set<Token>) {
+        get {
+            if let _tokenSets {
+                return _tokenSets
+            }
+
+            var stringTokens: Set<Token> = []
+            var leadingWhitespaceTokens: Set<Token> = []
+            
+            for i in 0..<totalTokenCount {
+                let token = Token(i)
+                let decoded = decode(token)
+                if decoded.isEmpty || decoded.contains(where: {  !$0.isValidStringCharacter }) { continue }
+                if let firstChar = decoded.first, firstChar.isWhitespace {
+                    leadingWhitespaceTokens.insert(token)
+                }
+                if decoded.first?.isValidStringCharacter ?? false {
+                    stringTokens.insert(token)
+                }
+            }
+            
+            let newSets = (stringTokens, leadingWhitespaceTokens)
+            self._tokenSets = newSets
+            return newSets
+        }
+    }
+    
+    private func generateStringValue(into output: inout String, allowedValues: [String]? = nil) throws {
+        if let allowedValues, !allowedValues.isEmpty {
+            try generateConstrainedString(into: &output, allowedValues: allowedValues)
+            return
+        }
+
+        try addToken("\"", to: &output)
+        
+        let maxTokens = 128
+        var tokensInString: [Token] = []
+        var hasContent = false
+        
+        let (stringTokens, leadingWhitespaceTokens) = tokenSets
+        
+        
+        while tokensInString.count < maxTokens {
+            var allowedTokens = stringTokens
+            if hasContent {
+                allowedTokens.insert(quoteToken)
+            }
+            if !hasContent || output.last == " " {
+                allowedTokens.subtract(leadingWhitespaceTokens)
+            }
+            
+            let predictedToken = sampleNextToken(from: allowedTokens)
+            guard predictedToken != endToken else { break }
+            
+            if predictedToken == quoteToken {
+                break
+            }
+            
+            try addToken(predictedToken, to: &output)
+            let decoded = decode(predictedToken)
+            tokensInString.append(predictedToken)
+            
+            if !hasContent && !decoded.trimmingCharacters(in: .whitespaces).isEmpty {
+                hasContent = true
+                allowedTokens.formUnion(leadingWhitespaceTokens)
+            }
+            
+            if tokensInString.hasThreeSameElementsAtTheEnd {
+                break
+            }
+        }
+        try addToken("\"", to: &output)
+    }
+    
+    private func generateConstrainedString(into output: inout String, allowedValues: [String]) throws {
+        try addToken("\"", to: &output)
+        
+        var currentTokens: [Token] = []
+        var candidateValues = allowedValues
+        
+        while !candidateValues.isEmpty {
+            let possibleNextTokens = Set(candidateValues.flatMap { value in
+                let fullTokens = encode(value, shouldAddBOS: false, special: false)
+                return currentTokens.count < fullTokens.count ? [fullTokens[currentTokens.count]] : []
+            })
+            
+            let quoteToken = encode("\"", shouldAddBOS: false, special: false).first!
+            let allowedTokens = possibleNextTokens.union([quoteToken])
+            
+            let nextToken = sampleNextToken(from: allowedTokens)
+            
+            if nextToken == quoteToken {
+                try addToken(nextToken, to: &output)
+                return
+            }
+            
+            currentTokens.append(nextToken)
+            try addToken(nextToken, to: &output)
+            
+            candidateValues = candidateValues.filter { value in
+                let valueTokens = encode(value, shouldAddBOS: false, special: false)
+                return currentTokens.count <= valueTokens.count && 
+                       Array(valueTokens.prefix(currentTokens.count)) == currentTokens
+            }
+        }
+        
+        try addToken("\"", to: &output)
+    }
+    
+    private func generateIntegerValue(into output: inout String) throws {
+        let maxLength = 19
+        var generatedString = ""
+        let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        let minusToken = encode("-", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
+        let terminators = Set([commaToken, closingBraceToken])
+
+        guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
+
+        while generatedString.count < maxLength {
+            var allowedTokens: Set<Token>
+
+            if generatedString.isEmpty {
+                allowedTokens = digitTokens.union([minusToken])
+            } else if generatedString == "-" {
+                allowedTokens = digitTokens
+            } else if generatedString == "0" || generatedString == "-0" {
+                allowedTokens = terminators
+            } else {
+                allowedTokens = digitTokens.union(terminators)
+            }
+
+            let nextToken = sampleNextToken(from: allowedTokens)
+            guard nextToken != endToken else { break }
+
+            if terminators.contains(nextToken) {
+                break
+            }
+
+            try addToken(nextToken, to: &output)
+            generatedString += decode(nextToken)
+        }
+
+        if generatedString.isEmpty || generatedString == "-" {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
+        }
+    }
+    
+    private func generateFloatingPointValue(into output: inout String) throws {
+        let maxLength = 32
+        var generatedString = ""
+        let digitTokens = Set("0123456789".compactMap { encode(String($0), shouldAddBOS: false, special: false).first })
+        let minusToken = encode("-", shouldAddBOS: false, special: false).first!
+        let dotToken = encode(".", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        let closingBraceToken = encode("}", shouldAddBOS: false, special: false).first!
+        let terminators = Set([commaToken, closingBraceToken])
+
+        guard !digitTokens.isEmpty else { throw LLMError.tokenizationFailed }
+
+        while generatedString.count < maxLength {
+            var allowedTokens: Set<Token>
+
+            if generatedString.isEmpty {
+                allowedTokens = digitTokens.union([minusToken])
+            } else if generatedString == "-" {
+                allowedTokens = digitTokens
+            } else if generatedString == "0" || generatedString == "-0" {
+                allowedTokens = terminators.union([dotToken])
+            } else if generatedString.contains(".") {
+                allowedTokens = digitTokens.union(terminators)
+            } else {
+                allowedTokens = digitTokens.union(terminators).union([dotToken])
+            }
+
+            let nextToken = sampleNextToken(from: allowedTokens)
+            guard nextToken != endToken else { break }
+
+            if terminators.contains(nextToken) {
+                break
+            }
+            
+            let decoded = decode(nextToken)
+            if decoded == "." && generatedString.contains(".") { break }
+
+            try addToken(nextToken, to: &output)
+            generatedString += decoded
+        }
+        
+        if generatedString.isEmpty || generatedString == "-" {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
+        }
+
+        if generatedString.last == "." {
+            let zeroToken = encode("0", shouldAddBOS: false, special: false).first!
+            try addToken(zeroToken, to: &output)
+        }
+    }
+    
+    private func generateBooleanValue(into output: inout String) throws {
+        let trueToken = encode("true", shouldAddBOS: false, special: false).first!
+        let falseToken = encode("false", shouldAddBOS: false, special: false).first!
+        let allowedTokens = Set([trueToken, falseToken])
+        
+        let predictedToken = sampleNextToken(from: allowedTokens)
+        guard predictedToken != endToken else {
+            try addToken("false", to: &output)
+            return
+        }
+        
+        try addToken(predictedToken, to: &output)
+    }
+    
+    private func generateObjectValue(into output: inout String, with schema: [String: Any]? = nil) throws {
+        try addToken("{", to: &output)
+        
+        guard let schema = schema,
+              let properties = schema["properties"] as? [String: Any],
+              let required = schema["required"] as? [String] else {
+            try addToken("}", to: &output)
+            return
+        }
+        
+        for (index, fieldName) in required.enumerated() {
+            guard let fieldInfo = properties[fieldName] as? [String: Any] else { continue }
+            
+            try addToken("\"\(fieldName)\":", to: &output)
+            try generateValueForFieldInfo(fieldInfo, into: &output)
+            
+            if index < required.count - 1 {
+                try addToken(",", to: &output)
+            }
+        }
+        
+        try addToken("}", to: &output)
+    }
+    
+    private func generateValueForFieldInfo(_ fieldInfo: [String: Any], into output: inout String) throws {
+        if let enumValues = fieldInfo["enum"] as? [String] {
+            try generateStringValue(into: &output, allowedValues: enumValues)
+            return
+        }
+        
+        let typeString = fieldInfo["type"] as? String ?? ""
+        switch typeString {
+        case "string":
+            try generateStringValue(into: &output, allowedValues: nil)
+        case "integer":
+            try generateIntegerValue(into: &output)
+        case "number":
+            try generateFloatingPointValue(into: &output)
+        case "boolean":
+            try generateBooleanValue(into: &output)
+        case "object":
+            try generateObjectValue(into: &output, with: fieldInfo)
+        case "array":
+            if let items = fieldInfo["items"] as? [String: Any] {
+                let itemType = parseItemType(from: items)
+                try generateArrayValue(into: &output, ofType: itemType, withItemSchema: items)
+            } else {
+                try addToken("[]", to: &output)
+            }
+        default:
+            try addToken("null", to: &output)
+        }
+    }
+    
+    private func parseItemType(from items: [String: Any]) -> JSONFieldType {
+        if let enumValues = items["enum"] as? [String] {
+            return .string(allowedValues: enumValues)
+        }
+        
+        let itemTypeString = items["type"] as? String ?? ""
+        switch itemTypeString {
+        case "string": return .string(allowedValues: nil)
+        case "integer": return .integer
+        case "number": return .number
+        case "boolean": return .boolean
+        case "object": return .object
+        default: return .string(allowedValues: nil)
+        }
+    }
+    
+    private func findFieldSchemaInOriginal(_ fieldName: String, originalSchema: String) -> [String: Any]? {
+        guard let schemaData = originalSchema.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
+              let properties = schema["properties"] as? [String: Any],
+              let fieldSchema = properties[fieldName] as? [String: Any] else {
+            return nil
+        }
+        return fieldSchema
+    }
+    
+    private func findFieldSchema(_ fieldName: String, in originalSchema: [String: Any]) -> [String: Any]? {
+        guard let properties = originalSchema["properties"] as? [String: Any],
+              let fieldSchema = properties[fieldName] as? [String: Any] else {
+            return nil
+        }
+        return fieldSchema
+    }
+    
+    private func generateArrayValue(into output: inout String, ofType itemType: JSONFieldType, withItemSchema itemSchema: [String: Any]? = nil) throws {
+        try addToken("[", to: &output)
+        
+        let maxItems = 5
+        var itemCount = 0
+        
+        let closingBracketToken = encode("]", shouldAddBOS: false, special: false).first!
+        let commaToken = encode(",", shouldAddBOS: false, special: false).first!
+        
+        while itemCount < maxItems {
+            switch itemType {
+            case .string(let allowedValues):
+                try generateStringValue(into: &output, allowedValues: allowedValues)
+            case .integer:
+                try generateIntegerValue(into: &output)
+            case .number:
+                try generateFloatingPointValue(into: &output)
+            case .boolean:
+                try generateBooleanValue(into: &output)
+            case .object:
+                try generateObjectValue(into: &output, with: itemSchema)
+            default:
+                break
+            }
+            
+            itemCount += 1
+            
+            if itemCount >= maxItems {
+                break
+            }
+            
+            let subsequentTokens = Set([commaToken, closingBracketToken])
+            let nextToken = sampleNextToken(from: subsequentTokens)
+            
+            try addToken(nextToken, to: &output)
+            
+            if nextToken == closingBracketToken {
+                return
+            }
+        }
+        
+        if !output.hasSuffix("]") {
+            try addToken("]", to: &output)
+        }
+    }
+    
+    // MARK: - Schema-Driven JSON Generation
+    
+    private enum JSONFieldType: Equatable {
+        case string(allowedValues: [String]?)
+        case integer
+        case number
+        case boolean
+        case object
+        indirect case array(itemType: JSONFieldType)
+    }
+    
+    private struct SchemaField: Equatable {
+        let name: String
+        let type: JSONFieldType
+        let required: Bool
+    }
+    
+    private struct ParsedSchema {
+        let fields: [SchemaField]
+        let requiredFields: [SchemaField]
+    }
+    
+    private func parseJSONSchema(_ schemaString: String) -> ParsedSchema? {
+        guard let schemaData = schemaString.data(using: .utf8),
+              let schema = try? JSONSerialization.jsonObject(with: schemaData) as? [String: Any],
+              let properties = schema["properties"] as? [String: Any] else {
+            return nil
+        }
+        
+        let fieldNames = schema["ordered_keys"] as? [String] ?? properties.keys.sorted()
+        
+        let required = schema["required"] as? [String] ?? []
+        var fields: [SchemaField] = []
+        
+        for fieldName in fieldNames {
+            guard let fieldInfo = properties[fieldName] as? [String: Any] else { continue }
+            
+            let fieldType: JSONFieldType
+            if let enumValues = fieldInfo["enum"] as? [String] {
+                fieldType = .string(allowedValues: enumValues)
+            } else {
+                let typeString = fieldInfo["type"] as? String ?? ""
+                switch typeString {
+                case "string": fieldType = .string(allowedValues: nil)
+                case "integer": fieldType = .integer
+                case "number": fieldType = .number
+                case "boolean": fieldType = .boolean
+                case "object": fieldType = .object
+                case "array":
+                    guard let items = fieldInfo["items"] as? [String: Any],
+                          let itemTypeString = items["type"] as? String else { continue }
+                    switch itemTypeString {
+                    case "string": 
+                        if let enumValues = items["enum"] as? [String] {
+                            fieldType = .array(itemType: .string(allowedValues: enumValues))
+                        } else {
+                            fieldType = .array(itemType: .string(allowedValues: nil))
+                        }
+                    case "integer": fieldType = .array(itemType: .integer)
+                    case "number": fieldType = .array(itemType: .number)
+                    case "object": fieldType = .array(itemType: .object)
+                    case "boolean": fieldType = .array(itemType: .boolean)
+                    default: continue
+                    }
+                default: continue
+                }
+            }
+            
+            let isRequired = required.contains(fieldName)
+            fields.append(SchemaField(name: fieldName, type: fieldType, required: isRequired))
+        }
+        
+        let requiredFields = fields.filter { $0.required }
+        return ParsedSchema(fields: fields, requiredFields: requiredFields)
+    }
+    
+    private func sampleNextToken(from allowedTokens: Set<Token>) -> Token {
+        guard shouldContinuePredicting, currentTokenCount < Int32(maxTokenCount) else {
+            return endToken
+        }
+        guard let sampler, !allowedTokens.isEmpty else { return endToken }
+        let (_, leadingWhitespaceTokens) = tokenSets
+        let protectedTokens = leadingWhitespaceTokens.union([quoteToken, endToken, whitespaceToken])
+        var protectedLogits: [Token: Float] = [:]
+        
+        if let logits = llama_get_logits(context) {
+            for token in protectedTokens {
+                protectedLogits[token] = logits[Int(token)]
+            }
+            
+            for t in 0..<totalTokenCount {
+                let token = Token(t)
+                if !allowedTokens.contains(token) {
+                    logits[t] = -Float.infinity
+                    if token != endToken {
+                        protectedLogits.removeValue(forKey: token)
+                    }
+                }
+            }
+        }
+
+        let i = batch.n_tokens - 1
+        _ = llama_sampler_sample(sampler, context, i)
+        
+        if let logits = llama_get_logits(context) {
+            for (index, token) in protectedTokens.enumerated() {
+                if let logit = protectedLogits[token] {
+                    logits[Int(token)] = logit
+                }
+            }
+        }
+        let token = llama_sampler_sample(sampler, context, i)
+        return token
+    }
+    
+    private func isValidJSON(_ text: String) -> Bool {
+        guard let data = text.data(using: .utf8) else { return false }
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            return true
+        } catch {
+            return false
+        }
+    }
+    
+    private func isComplete(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("{") && trimmed.hasSuffix("}")
+    }
 }
 
+/// Errors that can occur during LLM operations.
 public enum LLMError: Error {
     case modelLoadFailed
     case contextCreationFailed
@@ -284,6 +922,7 @@ public enum LLMError: Error {
     case embeddingsFailed
 }
 
+/// A container for text embeddings generated by the model.
 public struct Embeddings: Equatable {
     public let values: [Float]
     public let dimension: Int
@@ -316,6 +955,48 @@ public struct Embeddings: Equatable {
     }
 }
 
+/// A wrapper for structured output generated according to a JSON schema.
+///
+/// This type ensures that the model's output conforms to the specified
+/// structure defined by the `Generatable` protocol.
+public struct StructuredOutput<T: Generatable> {
+    public let value: T
+    public let rawOutput: String
+    
+    public init(value: T, rawOutput: String) {
+        self.value = value
+        self.rawOutput = rawOutput
+    }
+}
+
+/// Errors that can occur during structured output generation.
+public enum StructuredOutputError: Error {
+    case invalidJSON
+    case schemaMismatch
+    case decodingFailed
+}
+
+/// Main interface for interacting with Large Language Models in Swift applications.
+///
+/// `LLM` provides a high-level, SwiftUI-compatible interface for running language models
+/// locally using llama.cpp. It manages conversation history, provides async/await methods
+/// for generation, and integrates seamlessly with SwiftUI through `ObservableObject`.
+///
+/// ## Usage
+///
+/// ```swift
+/// let llm = try await LLM(from: .bundle(resource: "model", extension: "gguf"))
+/// let response = try await llm.generate(from: "Hello, how are you?")
+/// ```
+///
+/// ## Features
+///
+/// - **Conversation Management**: Automatically maintains chat history
+/// - **SwiftUI Integration**: Works as an `ObservableObject` for reactive UI updates
+/// - **Async/Await Support**: Modern Swift concurrency for non-blocking operations
+/// - **Streaming Responses**: Real-time token generation via `AsyncStream`
+/// - **Template Support**: Built-in chat templates for popular model formats
+/// - **Structured Output**: Generate JSON conforming to specified schemas
 open class LLM: ObservableObject {
     private(set) var model: Model
     public var history: [Chat]
@@ -360,6 +1041,18 @@ open class LLM: ObservableObject {
             Task { await core.setParameters(temp: temp) }
         }
     }
+
+    public var repeatPenalty: Float {
+        didSet {
+            Task { await core.setParameters(repeatPenalty: repeatPenalty) }
+        }
+    }
+    
+    public var repetitionLookback: Int32 {
+        didSet {
+            Task { await core.setParameters(repetitionLookback: repetitionLookback) }
+        }
+    }
     
     public var historyLimit: Int
     public var path: [CChar]
@@ -367,6 +1060,15 @@ open class LLM: ObservableObject {
     public let core: LLMCore
     private var isAvailable = true
     private var input: String = ""
+    
+    static var isLogSilenced = false
+    static func silenceLogging() {
+        guard !isLogSilenced else { return }
+        isLogSilenced = true
+        let noopCallback: @convention(c) (ggml_log_level, UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { _, _, _ in }
+        llama_log_set(noopCallback, nil)
+        ggml_log_set(noopCallback, nil)
+    }
     
     
     public init?(
@@ -377,9 +1079,12 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
+        LLM.silenceLogging()
         self.path = path.cString(using: .utf8)!
         self.seed = seed
         self.topK = topK
@@ -387,11 +1092,16 @@ open class LLM: ObservableObject {
         self.temp = temp
         self.historyLimit = historyLimit
         self.history = history
+        self.repeatPenalty = repeatPenalty
+        self.repetitionLookback = repetitionLookback
         
+        #if DEBUG
+        print("GNERATING WITH SEEED: \(seed)")
+        #endif
         var modelParams = llama_model_default_params()
-#if targetEnvironment(simulator)
+        #if targetEnvironment(simulator)
         modelParams.n_gpu_layers = 0
-#endif
+        #endif
         guard let model = llama_model_load_from_file(self.path, modelParams) else {
             return nil
         }
@@ -407,6 +1117,8 @@ open class LLM: ObservableObject {
                 topK: topK,
                 topP: topP,
                 temp: temp,
+                repeatPenalty: repeatPenalty,
+                repetitionLookback: repetitionLookback,
                 maxTokenCount: finalMaxTokenCount
             )
             
@@ -429,6 +1141,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
@@ -440,6 +1154,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
@@ -453,6 +1169,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048
     ) {
@@ -464,6 +1182,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
@@ -480,6 +1200,8 @@ open class LLM: ObservableObject {
         topK: Int32 = 40,
         topP: Float = 0.95,
         temp: Float = 0.8,
+        repeatPenalty: Float = 1.2,
+        repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
         maxTokenCount: Int32 = 2048,
         updateProgress: @Sendable @escaping (Double) -> Void = { print(String(format: "downloaded(%.2f%%)", $0 * 100)) }
@@ -495,6 +1217,8 @@ open class LLM: ObservableObject {
             topK: topK,
             topP: topP,
             temp: temp,
+            repeatPenalty: repeatPenalty,
+            repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
             maxTokenCount: maxTokenCount
         )
@@ -579,13 +1303,61 @@ open class LLM: ObservableObject {
         let values = try await core.getEmbeddings(from: text)
         return Embeddings(values: values)
     }
+    
+    public func respond<T: Generatable>(
+        to prompt: String,
+        as type: T.Type
+    ) async throws -> StructuredOutput<T> {
+        let schemaPrompt = """
+        \(prompt)
+        
+        Generate a JSON response that:
+        Matches this exact schema: \(T.jsonSchema)
+        Return only the JSON object, no other text.
+        """
+        let processedPrompt = preprocess(schemaPrompt, history)
+        
+        let rawOutput = try await core.generateWithConstraints(
+            from: processedPrompt,
+            jsonSchema: T.jsonSchema
+        )
+        
+        guard let jsonData = rawOutput.data(using: .utf8) else {
+            throw StructuredOutputError.invalidJSON
+        }
+        
+        do {
+            let decodedValue = try JSONDecoder().decode(T.self, from: jsonData)
+            let output = StructuredOutput(value: decodedValue, rawOutput: rawOutput)
+            history += [(.user, processedPrompt), (.bot, rawOutput)]
+            let historyCount = history.count
+            if historyLimit < historyCount {
+                history.removeFirst(min(2, historyCount))
+            }
+            postprocess(rawOutput)
+            return output
+        } catch {
+            print("JSON Decoding failed:")
+            print("Raw output: '\(rawOutput)'")
+            print("JSON data: '\(String(data: jsonData, encoding: .utf8) ?? "nil")'")
+            print("Error: \(error)")
+            print("Schema: \(T.jsonSchema)")
+            throw StructuredOutputError.decodingFailed
+        }
+    }
 }
 
+/// The role of a participant in a chat conversation.
 public enum Role {
     case user
     case bot
 }
 
+/// A chat template for formatting conversations according to model-specific formats.
+///
+/// Templates handle the preprocessing of user input and conversation history
+/// into formats expected by different language models, including system prompts,
+/// message formatting, and stop sequences.
 public struct Template: Sendable {
     public typealias Attachment = (prefix: String, suffix: String)
     public let system: Attachment
@@ -675,7 +1447,7 @@ public struct Template: Sendable {
         stopSequence: "</s>",
         systemPrompt: nil
     )
-
+    
     public static let gemma = Template(
         user: ("<start_of_turn>user\n", "<end_of_turn>\n"),
         bot: ("<start_of_turn>model\n", "<end_of_turn>\n"),
@@ -684,6 +1456,9 @@ public struct Template: Sendable {
     )
 }
 
+/// Quantization levels available for model compression.
+///
+/// Quantization reduces model size and memory usage at the cost of some accuracy.
 public enum Quantization: String {
     case IQ1_S
     case IQ1_M
@@ -714,12 +1489,17 @@ public enum Quantization: String {
     case Q8_0
 }
 
+/// Errors that can occur when downloading models from Hugging Face.
 public enum HuggingFaceError: Error {
     case network(statusCode: Int)
     case noFilteredURL
     case urlIsNilForSomeReason
 }
 
+/// A utility for downloading and managing models from Hugging Face.
+///
+/// This struct provides methods to download GGUF models directly from
+/// Hugging Face repositories with support for different quantization levels.
 public struct HuggingFaceModel {
     public let name: String
     public let template: Template
@@ -746,7 +1526,7 @@ public struct HuggingFaceModel {
         let root = "https://huggingface.co"
         return matches.map { match in root + match }
     }
-
+    
     package func getDownloadURL() async throws -> URL? {
         let urlStrings = try await getDownloadURLStrings()
         for urlString in urlStrings {
@@ -836,5 +1616,18 @@ extension [String] {
         let firstIndex = count
         let lastIndex = count * 2
         self.removeSubrange(firstIndex..<lastIndex)
+    }
+}
+
+extension Array where Element: Equatable {
+    var hasThreeSameElementsAtTheEnd: Bool {
+        count >= 3 && self[count - 3] == self[count - 2] && self[count - 2] == self[count - 1]
+    }
+}
+
+extension Character {
+    var isValidStringCharacter: Bool {
+        guard self != "\"" && self != "\\" else { return false }
+        return isLetter || self == " " || isNumber || isLowercase || isUppercase || isASCII && isPunctuation || isASCII && isSymbol
     }
 }

@@ -311,4 +311,427 @@ final class LLMTests {
         #expect(embeddings2 == embeddings3)
         #expect(embeddings1 == embeddings3)
     }
+
+    //MARK: Generatable macro tests
+    
+    @Generatable
+    struct Person {
+        let name: String
+        let age: Int
+        let occupation: String
+        let personality: String
+    }
+    
+    @Test
+    func testStructuredOutput() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a person",
+            as: Person.self
+        )
+        let person = result.value
+        let output = result.rawOutput
+        
+        print(person)
+        #expect(person.name.count > 0)
+        #expect(person.age > 0)
+        #expect(person.occupation.count > 0)
+        #expect(person.personality.count > 0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Book {
+        let title: String
+        let pages: Int
+        let author: String
+    }
+
+    @Test
+    func testStructuredOutputWithBook() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "A real classic book with a title, number of pages, and an author.",
+            as: Book.self
+        )
+        let book = result.value
+        let output = result.rawOutput
+        
+        print(book)
+        #expect(book.title.count > 0)
+        #expect(book.pages > 0)
+        #expect(book.author.count > 0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Measurements {
+        let height: Double
+        let weight: Float
+    }
+
+    @Test
+    func testStructuredOutputWithMeasurements() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate measurements of a random person in meters and kilograms",
+            as: Measurements.self
+        )
+        let measurements = result.value
+        let output = result.rawOutput
+        
+        print(measurements)
+        #expect(measurements.height > 0.0)
+        #expect(measurements.weight > 0.0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Temperature {
+        let degreesInCelcius: Double
+    }
+
+    @Test
+    func testStructuredOutputWithSignedNumbers() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Coldest temperature below zero you can think of in Celsius, preferabably zero Kelvin in Celsius",
+            as: Temperature.self
+        )
+        let temperature = result.value
+        let output = result.rawOutput
+        
+        print(temperature)
+        #expect(temperature.degreesInCelcius < 0)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct ShoppingList {
+        let items: [String]
+    }
+
+    @Test
+    func testStructuredOutputWithShoppingList() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Generate a shopping list with groceries.",
+            as: ShoppingList.self
+        )
+        let list = result.value
+        let output = result.rawOutput
+        
+        print(list)
+        #expect(!list.items.isEmpty)
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    enum Color {
+        case red
+        case orange
+        case yellow
+        case green
+        case blue
+        case purple
+    }
+
+    @Generatable
+    struct Vegetable {
+        let color: Color
+        let name: String
+    }
+
+    @Test
+    func testColorSchema() {
+        print("Color schema: \(Color.jsonSchema)")
+        print("ColoredItem schema: \(Vegetable.jsonSchema)")
+        let schema = try! JSONSerialization.jsonObject(with: Vegetable.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        let properties = schema["properties"] as! [String: Any]
+        print("properties keys: \(properties.keys)")
+        let color = properties["color"] as! [String: Any]
+        print("color: \(color)")
+        #expect(color["enum"] as? [String] == Color.allCases.map{"\($0)"})
+    }
+    
+    @Test
+    func testStructuredOutputWithVegetable() async throws {
+        let bot = try await LLM(from: model, seed: 1605617885)!
+        
+        let result = try await bot.respond(
+            to: "Give me any vegetable that is purple.",
+            as: Vegetable.self
+        )
+        let item = result.value
+        let output = result.rawOutput
+        
+        print(item)
+        #expect(!item.name.isEmpty)
+        #expect([.red, .orange, .yellow, .green, .blue, .purple].contains(item.color))
+        #expect(!output.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData)
+        #expect(parsed is [String: Any])
+    }
+
+    @Generatable
+    struct Location {
+        let latitude: Double
+        let longitude: Double
+    }
+
+    @Generatable 
+    struct Restaurant {
+        let name: String
+        let cuisine: String
+        let location: Location
+    }
+
+    @Test
+    func testNestedGeneratableSchemas() throws {
+        // Test Location schema
+        let locationSchema = try JSONSerialization.jsonObject(with: Location.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(locationSchema["type"] as? String == "object")
+        let locationProps = locationSchema["properties"] as! [String: Any]
+        #expect(locationProps.keys.contains("latitude"))
+        #expect(locationProps.keys.contains("longitude"))
+        let latType = locationProps["latitude"] as! [String: Any]
+        #expect(latType["type"] as? String == "number")
+        
+        // Test Restaurant schema  
+        let restaurantSchema = try JSONSerialization.jsonObject(with: Restaurant.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(restaurantSchema["type"] as? String == "object")
+        let restaurantProps = restaurantSchema["properties"] as! [String: Any]
+        #expect(restaurantProps.keys.contains("name"))
+        #expect(restaurantProps.keys.contains("cuisine"))
+        #expect(restaurantProps.keys.contains("location"))
+        
+        let locationProp = restaurantProps["location"] as! [String: Any]
+        #expect(locationProp["type"] as? String == "object")
+        let nestedProps = locationProp["properties"] as! [String: Any]
+        #expect(nestedProps.keys.contains("latitude"))
+        #expect(nestedProps.keys.contains("longitude"))
+        
+        // Test Garden schema
+        let gardenSchema = try JSONSerialization.jsonObject(with: Garden.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(gardenSchema["type"] as? String == "object")
+        let gardenProps = gardenSchema["properties"] as! [String: Any]
+        #expect(gardenProps.keys.contains("vegetables"))
+        #expect(gardenProps.keys.contains("totalPlants"))
+        
+        let vegetablesProp = gardenProps["vegetables"] as! [String: Any]
+        #expect(vegetablesProp["type"] as? String == "array")
+        let items = vegetablesProp["items"] as! [String: Any]
+        #expect(items["type"] as? String == "object")
+        let itemProps = items["properties"] as! [String: Any]
+        #expect(itemProps.keys.contains("name"))
+        #expect(itemProps.keys.contains("color"))
+    }
+    
+    @Test
+    func testNestedGeneratableStruct() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a restaurant with name, cuisine type, and location (latitude and longitude coordinates).",
+            as: Restaurant.self
+        )
+        let restaurant = result.value
+        let output = result.rawOutput
+        
+        print("Restaurant: \(restaurant)")
+        print("Raw output: \(output)")
+        
+        #expect(!restaurant.name.isEmpty)
+        #expect(!restaurant.cuisine.isEmpty)
+        #expect(restaurant.location.latitude >= -90 && restaurant.location.latitude <= 90)
+        #expect(restaurant.location.longitude >= -180 && restaurant.location.longitude <= 180)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let location = parsed["location"] as! [String: Any]
+        #expect(location["latitude"] is Double)
+        #expect(location["longitude"] is Double)
+    }
+
+    @Generatable
+    struct Garden {
+        let vegetables: [Vegetable]
+        let totalPlants: Int
+    }
+
+    @Test
+    func testArrayOfGeneratableStructs() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a garden with 3 different vegetables (each with name and color of the vegetable)",
+            as: Garden.self
+        )
+        let garden = result.value
+        let output = result.rawOutput
+        
+        print("Garden: \(garden)")
+        print("Raw output: \(output)")
+        
+        #expect(garden.vegetables.count >= 1)
+        #expect(garden.totalPlants >= garden.vegetables.count)
+        
+        for vegetable in garden.vegetables {
+            #expect(!vegetable.name.isEmpty)
+            #expect([.red, .orange, .yellow, .green, .blue, .purple].contains(vegetable.color))
+        }
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let vegetables = parsed["vegetables"] as! [[String: Any]]
+        #expect(vegetables.count >= 1)
+        
+        for vegetable in vegetables {
+            #expect(vegetable["name"] is String)
+            #expect(vegetable["color"] is String)
+        }
+    }
+
+    @Generatable
+    struct Profile {
+        let name: String
+        let age: Int
+        let bio: String?
+        let nickname: String?
+    }
+
+    @Test
+    func testOptionalFieldSchema() throws {
+        let profileSchema = try JSONSerialization.jsonObject(with: Profile.jsonSchema.data(using: .utf8)!) as! [String: Any]
+        #expect(profileSchema["type"] as? String == "object")
+        
+        let properties = profileSchema["properties"] as! [String: Any]
+        #expect(properties.keys.contains("name"))
+        #expect(properties.keys.contains("age"))
+        #expect(properties.keys.contains("bio"))
+        #expect(properties.keys.contains("nickname"))
+        
+        let required = profileSchema["required"] as! [String]
+        #expect(required.contains("name"))
+        #expect(required.contains("age"))
+        #expect(!required.contains("bio"))
+        #expect(!required.contains("nickname"))
+        
+        let bioField = properties["bio"] as! [String: Any]
+        #expect(bioField["type"] as? String == "string")
+    }
+
+    @Test
+    func testStructuredOutputWithOptionalFields() async throws {
+        let bot = try await LLM(from: model, seed: 3978003299)!
+        
+        let result = try await bot.respond(
+            to: "Create a minimal user profile with just name and age, no bio or nickname needed.",
+            as: Profile.self
+        )
+        let profile = result.value
+        let output = result.rawOutput
+        
+        print("Profile: \(profile)")
+        print("Raw output: \(output)")
+        
+        #expect(!profile.name.isEmpty)
+        #expect(profile.age > 0)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        #expect(parsed["name"] is String)
+        #expect(parsed["age"] is Int)
+    }
+    
+    @Generatable
+    struct Address {
+        let street: String
+        let city: String
+        let zipCode: String
+    }
+    
+    @Generatable
+    enum Priority {
+        case low, medium, high
+    }
+    
+    @Generatable
+    struct Task {
+        let title: String
+        let priority: Priority
+        let assignee: Person
+    }
+    
+    @Generatable
+    struct Project {
+        let name: String
+        let tasks: [Task]
+        let teamLead: Person
+        let office: Address
+    }
+    
+    @Test
+    func testNestedGeneratableStructures() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a software development project with tasks, team members, and office location details. Project name should be short and clear.",
+            as: Project.self
+        )
+        let project = result.value
+        let output = result.rawOutput
+        
+        print("Project: \(project)")
+        print("Raw output: \(output)")
+        
+        #expect(!project.name.isEmpty)
+        #expect(!project.tasks.isEmpty)
+        #expect(!project.teamLead.name.isEmpty)
+        #expect(project.teamLead.age > 0)
+        #expect(!project.office.street.isEmpty)
+        #expect(!project.office.city.isEmpty)
+        
+        #expect(!project.tasks[0].title.isEmpty)
+        #expect(!project.tasks[0].assignee.name.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let office = parsed["office"] as! [String: Any]
+        let tasks = parsed["tasks"] as! [Any]
+        let firstTask = tasks[0] as! [String: Any]
+        let assignee = firstTask["assignee"] as! [String: Any]
+        
+        #expect(office["street"] is String)
+        #expect(office["city"] is String)
+        #expect(assignee["name"] is String)
+        #expect(assignee["age"] is Int)
+    }
 }

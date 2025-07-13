@@ -112,8 +112,71 @@ struct ContentView: View {
 }
 ```
 
+## Structured Output with @Generatable
+
+The `@Generatable` macro enables **100% reliable** type-safe structured output generation. No more struggling with prompting to get output in the format you want—it works every time and allows true programmatic flow. Simply annotate your Swift structs and enums to automatically generate JSON schemas that guide the model to produce valid, structured responses:
+
+```swift
+@Generatable
+struct Person {
+    let name: String
+    let age: Int
+    let occupation: String
+    let personality: String
+}
+
+let bot = LLM(from: Bundle.main.url(forResource: "model", withExtension: "gguf")!, template: .chatML("You are helpful."))
+let result = try await bot.respond(to: "Create a fictional character", as: Person.self)
+let person = result.value // Guaranteed to be a valid Person struct
+print(person.name) // "Alice"
+print(person.age) // 28
+```
+
+The macro works with structs, enums, arrays, and supports nested Generatable structures:
+
+```swift
+@Generatable
+enum Priority {
+    case low, medium, high, urgent
+}
+
+@Generatable
+struct Address {
+    let street: String
+    let city: String
+    let zipCode: String
+}
+
+@Generatable 
+struct Task {
+    let title: String
+    let priority: Priority
+    let assignee: Person // Nested Generatable struct
+}
+
+@Generatable
+struct Project {
+    let name: String
+    let tasks: [Task] // Arrays of Generatable structs
+    let teamLead: Person // Nested Generatable types
+    let office: Address // Multiple levels of nesting
+}
+
+let result = try await bot.respond(to: "Create a software project plan", as: Project.self)
+```
+
+The macro automatically:
+- Generates JSON schema for structs and enums
+- Adds Codable conformance and CaseIterable for enums
+- Handles nested Generatable structures and arrays
+- Provides automatic validation
+- Returns both the parsed object and raw JSON output
+
+> [!TIP]  
+> Check `LLMTests.swift` for more comprehensive examples and use cases of `@Generatable`.
+
 ## Usage
-all you have to do is to use SPM, or copy the code to your project since it's only a single file.
+Add the package using SPM:
 ```swift
 dependencies: [
     .package(url: "https://github.com/eastriverlee/LLM.swift/", branch: "main"),
@@ -121,8 +184,9 @@ dependencies: [
 ```
 
 ## Overview
-`LLM.swift` is basically a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp) package, so that it stays as performant as possible while is always up to date. so theoretically, any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
-It's only a single file library, so you can copy, study and modify the code however you want.
+`LLM.swift` started as a lightweight abstraction layer over [`llama.cpp`](https://github.com/ggerganov/llama.cpp), and has evolved into a comprehensive Swift library with advanced features like `@Generatable` that allows users to control LLMs programmatically. It stays as performant as possible while always being up to date—any model that works on [`llama.cpp`](https://github.com/ggerganov/llama.cpp) should work with this library as well.  
+
+The core implementation is in `LLM.swift`, making it easy to understand and extend the library for your specific needs.
 
 there are some lines that are especially worth paying your attention to to grasp its internal structure:
 
