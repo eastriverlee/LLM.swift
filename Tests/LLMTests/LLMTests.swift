@@ -354,7 +354,7 @@ final class LLMTests {
 
     @Test
     func testStructuredOutputWithBook() async throws {
-        let bot = try await LLM(from: model, seed: 2)!
+        let bot = try await LLM(from: model)!
         
         let result = try await bot.respond(
             to: "A real classic book with a title, number of pages, and an author.",
@@ -669,5 +669,69 @@ final class LLMTests {
         let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
         #expect(parsed["name"] is String)
         #expect(parsed["age"] is Int)
+    }
+    
+    @Generatable
+    struct Address {
+        let street: String
+        let city: String
+        let zipCode: String
+    }
+    
+    @Generatable
+    enum Priority {
+        case low, medium, high
+    }
+    
+    @Generatable
+    struct Task {
+        let title: String
+        let priority: Priority
+        let assignee: Person
+    }
+    
+    @Generatable
+    struct Project {
+        let name: String
+        let tasks: [Task]
+        let teamLead: Person
+        let office: Address
+    }
+    
+    @Test
+    func testNestedGeneratableStructures() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create a software development project with tasks, team members, and office location details. Project name should be short and clear.",
+            as: Project.self
+        )
+        let project = result.value
+        let output = result.rawOutput
+        
+        print("Project: \(project)")
+        print("Raw output: \(output)")
+        
+        #expect(!project.name.isEmpty)
+        #expect(!project.tasks.isEmpty)
+        #expect(!project.teamLead.name.isEmpty)
+        #expect(project.teamLead.age > 0)
+        #expect(!project.office.street.isEmpty)
+        #expect(!project.office.city.isEmpty)
+        
+        #expect(!project.tasks[0].title.isEmpty)
+        #expect(!project.tasks[0].assignee.name.isEmpty)
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        let office = parsed["office"] as! [String: Any]
+        let tasks = parsed["tasks"] as! [Any]
+        let firstTask = tasks[0] as! [String: Any]
+        let assignee = firstTask["assignee"] as! [String: Any]
+        
+        #expect(office["street"] is String)
+        #expect(office["city"] is String)
+        #expect(assignee["name"] is String)
+        #expect(assignee["age"] is Int)
     }
 }

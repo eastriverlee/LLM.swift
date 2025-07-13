@@ -428,12 +428,11 @@ public actor LLMCore {
             for i in 0..<totalTokenCount {
                 let token = Token(i)
                 let decoded = decode(token)
-                if decoded.isEmpty || decoded.filter({$0 != " "}).contains(where: {$0 == "\"" || $0.isWhitespace || !$0.isASCII && !$0.isLowercase && !$0.isNumber && !$0.isUppercase}) { continue }
-                if let firstChar = decoded.first, firstChar == " " {
+                if decoded.isEmpty || decoded.contains(where: {  !$0.isValidStringCharacter }) { continue }
+                if let firstChar = decoded.first, firstChar.isWhitespace {
                     leadingWhitespaceTokens.insert(token)
                 }
-
-                if let firstChar = decoded.first, firstChar.isLetterOrSpace && decoded.count < 10  {
+                if decoded.first?.isValidStringCharacter ?? false {
                     stringTokens.insert(token)
                 }
             }
@@ -848,19 +847,22 @@ public actor LLMCore {
             return endToken
         }
         guard let sampler, !allowedTokens.isEmpty else { return endToken }
-        
-        let protectedTokens = [quoteToken, endToken, whitespaceToken]
-        var protectedLogits: [Float] = []
+        let (_, leadingWhitespaceTokens) = tokenSets
+        let protectedTokens = leadingWhitespaceTokens.union([quoteToken, endToken, whitespaceToken])
+        var protectedLogits: [Token: Float] = [:]
         
         if let logits = llama_get_logits(context) {
             for token in protectedTokens {
-                protectedLogits.append(logits[Int(token)])
+                protectedLogits[token] = logits[Int(token)]
             }
             
             for t in 0..<totalTokenCount {
                 let token = Token(t)
                 if !allowedTokens.contains(token) {
                     logits[t] = -Float.infinity
+                    if token != endToken {
+                        protectedLogits.removeValue(forKey: token)
+                    }
                 }
             }
         }
@@ -870,7 +872,9 @@ public actor LLMCore {
         
         if let logits = llama_get_logits(context) {
             for (index, token) in protectedTokens.enumerated() {
-                logits[Int(token)] = protectedLogits[index]
+                if let logit = protectedLogits[token] {
+                    logits[Int(token)] = logit
+                }
             }
         }
         let token = llama_sampler_sample(sampler, context, i)
@@ -1566,7 +1570,8 @@ extension Array where Element: Equatable {
 }
 
 extension Character {
-    var isLetterOrSpace: Bool {
-        isLetter || self == " "
+    var isValidStringCharacter: Bool {
+        guard self != "\"" && self != "\\" else { return false }
+        return isLetter || self == " " || isNumber || isLowercase || isUppercase || isASCII && isPunctuation || isASCII && isSymbol
     }
 }
