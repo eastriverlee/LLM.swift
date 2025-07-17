@@ -70,7 +70,15 @@ public actor LLMCore {
         if let repetitionLookback { self.repetitionLookback = repetitionLookback }
         
         if seed != nil || topK != nil || topP != nil || temp != nil || repeatPenalty != nil || repetitionLookback != nil {
-            recreateSampler()
+            self.sampler = recreateSampler(
+                sampler: self.sampler,
+                repetitionLookback: self.repetitionLookback,
+                repeatPenalty: self.repeatPenalty,
+                topK: self.topK,
+                topP: self.topP,
+                temp: self.temp,
+                seed: self.seed
+            )
         }
     }
     
@@ -119,10 +127,9 @@ public actor LLMCore {
         return metrics
     }
     
-    private func recordModelLoadTime() {
-        if let startTime = modelLoadStartTime {
+    private nonisolated func recordModelLoadTime(startTime: Date?, performanceMonitor: PerformanceMonitor?) {
+        if let startTime = startTime {
             let loadTime = Date().timeIntervalSince(startTime)
-            // Update the current metrics with model load time if available
             if let currentMetrics = performanceMonitor?.currentMetrics {
                 let updatedMetrics = PerformanceMetrics(
                     tokensPerSecond: currentMetrics.tokensPerSecond,
@@ -137,28 +144,58 @@ public actor LLMCore {
                 )
                 performanceMonitor?.recordMetrics(updatedMetrics)
             }
-            modelLoadStartTime = nil
         }
     }
+
+    /// Creates a new sampler with the specified parameters.
+    /// This method is static and nonisolated to allow it to be called from the actor's initializer,
+    /// which is a nonisolated context. Actor initializers cannot call instance methods or access
+    /// instance properties, so we need a static method that doesn't depend on instance state.
+    private nonisolated static func createSampler(
+        repetitionLookback: Int32,
+        repeatPenalty: Float,
+        topK: Int32,
+        topP: Float,
+        temp: Float,
+        seed: UInt32
+    ) -> UnsafeMutablePointer<llama_sampler>? {
+        let samplerParams = llama_sampler_chain_default_params()
+        let newSampler = llama_sampler_chain_init(samplerParams)
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_dist(seed))
+        return newSampler
+    }
     
-    private func recreateSampler() {
+    /// Recreates the sampler with new parameters, freeing the old one if it exists.
+    /// This method is actor-isolated since it's called from instance methods that can access
+    /// actor state. It delegates the actual sampler creation to the static createSampler method.
+    private func recreateSampler(
+        sampler: UnsafeMutablePointer<llama_sampler>?,
+        repetitionLookback: Int32,
+        repeatPenalty: Float,
+        topK: Int32,
+        topP: Float,
+        temp: Float,
+        seed: UInt32
+    ) -> UnsafeMutablePointer<llama_sampler>? {
         if let sampler {
             llama_sampler_free(sampler)
         }
-        
-        let samplerParams = llama_sampler_chain_default_params()
-        sampler = llama_sampler_chain_init(samplerParams)
-        
-        llama_sampler_chain_add(sampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
+        return Self.createSampler(
+            repetitionLookback: repetitionLookback,
+            repeatPenalty: repeatPenalty,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            seed: seed
+        )
     }
-    
+
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
         modelLoadStartTime = Date()
-        
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -169,7 +206,6 @@ public actor LLMCore {
         self.repetitionLookback = repetitionLookback
         self.maxTokenCount = maxTokenCount
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
-        
         var contextParams = llama_context_default_params()
         let processorCount = Int32(ProcessInfo().processorCount)
         contextParams.n_ctx = UInt32(maxTokenCount)
@@ -177,19 +213,24 @@ public actor LLMCore {
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         self.params = contextParams
-        
         guard let context = llama_init_from_model(model, params) else {
             throw LLMError.contextCreationFailed
         }
         self.context = context
-        
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
-        
-        recreateSampler()
+        // Use static method to create initial sampler since actor initializers are nonisolated
+        self.sampler = Self.createSampler(
+            repetitionLookback: repetitionLookback,
+            repeatPenalty: repeatPenalty,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            seed: seed
+        )
     }
-    
+
     deinit {
-        recordModelLoadTime()
+        recordModelLoadTime(startTime: modelLoadStartTime, performanceMonitor: performanceMonitor)
         llama_batch_free(batch)
         llama_free(context)
         if let sampler {
