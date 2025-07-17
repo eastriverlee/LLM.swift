@@ -175,6 +175,124 @@ The macro automatically:
 > [!TIP]  
 > Check `LLMTests.swift` for more comprehensive examples and use cases of `@Generatable`.
 
+## Performance Monitoring
+
+LLM.swift includes comprehensive performance monitoring capabilities to help you optimize your applications and understand model behavior.
+
+### Basic Performance Monitoring
+
+```swift
+let bot = LLM(from: Bundle.main.url(forResource: "model", withExtension: "gguf")!, template: .chatML("You are helpful."))!
+
+// Start profiling
+bot.startProfiling()
+
+// Perform operations
+await bot.respond(to: "Explain quantum computing")
+await bot.respond(to: "What is machine learning?")
+
+// Stop profiling and get detailed report
+let report = bot.stopProfiling()
+
+print("Session duration: \(report.sessionDuration)s")
+print("Total tokens generated: \(report.totalTokensGenerated)")
+print("Average tokens per second: \(report.averageTokensPerSecond)")
+print("Peak memory usage: \(report.peakMemoryUsage) bytes")
+```
+
+### Real-time Performance Metrics
+
+```swift
+// Get current metrics at any time
+let metrics = await bot.getPerformanceMetrics()
+if let metrics = metrics {
+    print("Current tokens per second: \(metrics.tokensPerSecond)")
+    print("Current memory usage: \(metrics.memoryUsage) bytes")
+    print("Last inference time: \(metrics.inferenceTime)s")
+    print("Tokens generated: \(metrics.tokensGenerated)")
+    print("Context length: \(metrics.contextLength)")
+    print("Average time per token: \(metrics.averageTimePerToken)s")
+}
+```
+
+### Performance Analysis
+
+```swift
+let report = bot.stopProfiling()
+
+// Analyze performance patterns
+if let bestMetrics = report.bestMetrics {
+    print("Best performance: \(bestMetrics.tokensPerSecond) tokens/sec")
+}
+
+if let worstMetrics = report.worstMetrics {
+    print("Worst performance: \(worstMetrics.tokensPerSecond) tokens/sec")
+}
+
+print("Average inference time: \(report.averageInferenceTime)s")
+print("Average memory usage: \(report.averageMemoryUsage) bytes")
+
+// Access all individual metrics
+for (index, metrics) in report.metrics.enumerated() {
+    print("Operation \(index + 1): \(metrics.tokensPerSecond) tokens/sec")
+}
+```
+
+### SwiftUI Integration
+
+```swift
+struct PerformanceView: View {
+    @ObservedObject var bot: LLM
+    @State private var isProfiling = false
+    @State private var report: PerformanceReport?
+    
+    var body: some View {
+        VStack {
+            if let metrics = bot.currentMetrics {
+                VStack(alignment: .leading) {
+                    Text("Tokens/sec: \(String(format: "%.1f", metrics.tokensPerSecond))")
+                    Text("Memory: \(ByteCountFormatter.string(fromByteCount: metrics.memoryUsage, countStyle: .memory))")
+                    Text("Inference time: \(String(format: "%.2f", metrics.inferenceTime))s")
+                }
+                .padding()
+            }
+            
+            Button(isProfiling ? "Stop Profiling" : "Start Profiling") {
+                if isProfiling {
+                    report = bot.stopProfiling()
+                    isProfiling = false
+                } else {
+                    bot.startProfiling()
+                    isProfiling = true
+                }
+            }
+            
+            if let report = report {
+                VStack(alignment: .leading) {
+                    Text("Session Report:")
+                    Text("Duration: \(String(format: "%.1f", report.sessionDuration))s")
+                    Text("Total tokens: \(report.totalTokensGenerated)")
+                    Text("Avg tokens/sec: \(String(format: "%.1f", report.averageTokensPerSecond))")
+                }
+                .padding()
+            }
+        }
+    }
+}
+```
+
+### Performance Metrics Explained
+
+- **tokensPerSecond**: Generation speed in tokens per second
+- **memoryUsage**: Current memory consumption in bytes
+- **inferenceTime**: Time taken for the last generation
+- **contextLength**: Number of tokens in current context
+- **tokensGenerated**: Number of tokens generated in last operation
+- **averageTimePerToken**: Average time per generated token
+- **peakMemoryUsage**: Highest memory usage during session
+- **modelLoadTime**: Time taken to load the model (if available)
+- **contextPrepTime**: Time taken to prepare context (if available)
+
 ## Usage
 Add the package using SPM:
 ```swift

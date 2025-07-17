@@ -55,6 +55,12 @@ public actor LLMCore {
     
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
+    // Performance monitoring
+    private var performanceMonitor: PerformanceMonitor?
+    private var operationStartTime: Date?
+    private var tokensGeneratedInOperation: Int = 0
+    private var modelLoadStartTime: Date?
+    
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
         if let topK { self.topK = topK }
@@ -76,6 +82,65 @@ public actor LLMCore {
         }
     }
     
+    // Performance monitoring methods
+    func setPerformanceMonitor(_ monitor: PerformanceMonitor?) {
+        performanceMonitor = monitor
+    }
+    
+    func startProfiling() {
+        performanceMonitor?.startProfiling()
+    }
+    
+    func stopProfiling() -> PerformanceReport {
+        return performanceMonitor?.stopProfiling() ?? PerformanceReport(sessionDuration: 0, metrics: [], averageTokensPerSecond: 0, totalTokensGenerated: 0, peakMemoryUsage: 0)
+    }
+    
+    func getCurrentMetrics() -> PerformanceMetrics? {
+        return performanceMonitor?.currentMetrics
+    }
+    
+    private func startOperation() {
+        operationStartTime = Date()
+        tokensGeneratedInOperation = 0
+        performanceMonitor?.startOperation()
+    }
+    
+    private func endOperation() -> PerformanceMetrics? {
+        guard operationStartTime != nil else { return nil }
+        
+        let metrics = performanceMonitor?.endOperation(
+            tokensGenerated: tokensGeneratedInOperation,
+            contextLength: Int(currentTokenCount)
+        )
+        
+        operationStartTime = nil
+        tokensGeneratedInOperation = 0
+        
+        return metrics
+    }
+    
+    private func recordModelLoadTime() {
+        if let startTime = modelLoadStartTime {
+            let loadTime = Date().timeIntervalSince(startTime)
+            // Update the current metrics with model load time if available
+            if let currentMetrics = performanceMonitor?.currentMetrics {
+                let updatedMetrics = PerformanceMetrics(
+                    tokensPerSecond: currentMetrics.tokensPerSecond,
+                    memoryUsage: currentMetrics.memoryUsage,
+                    inferenceTime: currentMetrics.inferenceTime,
+                    contextLength: currentMetrics.contextLength,
+                    tokensGenerated: currentMetrics.tokensGenerated,
+                    averageTimePerToken: currentMetrics.averageTimePerToken,
+                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
+                    modelLoadTime: loadTime,
+                    contextPrepTime: currentMetrics.contextPrepTime
+                )
+                performanceMonitor?.recordMetrics(updatedMetrics)
+            }
+            modelLoadStartTime = nil
+        }
+    }
+    
     private func recreateSampler() {
         if let sampler {
             llama_sampler_free(sampler)
@@ -92,6 +157,8 @@ public actor LLMCore {
     }
     
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
+        modelLoadStartTime = Date()
+        
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -122,6 +189,7 @@ public actor LLMCore {
     }
     
     deinit {
+        recordModelLoadTime()
         llama_batch_free(batch)
         llama_free(context)
         if let sampler {
@@ -253,15 +321,60 @@ public actor LLMCore {
     func generateResponseStream(from input: String) -> AsyncStream<String> {
         return AsyncStream<String> { continuation in
             Task {
-                guard prepareContext(for: input) else { return continuation.finish() }
+                startOperation()
+                
+                let contextPrepStart = Date()
+                guard prepareContext(for: input) else { 
+                    _ = endOperation()
+                    return continuation.finish() 
+                }
+                let contextPrepTime = Date().timeIntervalSince(contextPrepStart)
+                
                 if let sampler { llama_sampler_reset(sampler) }
                 
                 while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                     let token = predictNextToken()
-                    guard token != endToken else { return continuation.finish() }
+                    guard token != endToken else { 
+                        let metrics = endOperation()
+                        // Update metrics with context prep time
+                        if let metrics = metrics {
+                            let updatedMetrics = PerformanceMetrics(
+                                tokensPerSecond: metrics.tokensPerSecond,
+                                memoryUsage: metrics.memoryUsage,
+                                inferenceTime: metrics.inferenceTime,
+                                contextLength: metrics.contextLength,
+                                tokensGenerated: metrics.tokensGenerated,
+                                averageTimePerToken: metrics.averageTimePerToken,
+                                peakMemoryUsage: metrics.peakMemoryUsage,
+                                modelLoadTime: metrics.modelLoadTime,
+                                contextPrepTime: contextPrepTime
+                            )
+                            performanceMonitor?.recordMetrics(updatedMetrics)
+                        }
+                        return continuation.finish() 
+                    }
                     let word = decode(token)
+                    tokensGeneratedInOperation += 1
                     continuation.yield(word)
                 }
+                
+                let metrics = endOperation()
+                // Update metrics with context prep time
+                if let metrics = metrics {
+                    let updatedMetrics = PerformanceMetrics(
+                        tokensPerSecond: metrics.tokensPerSecond,
+                        memoryUsage: metrics.memoryUsage,
+                        inferenceTime: metrics.inferenceTime,
+                        contextLength: metrics.contextLength,
+                        tokensGenerated: metrics.tokensGenerated,
+                        averageTimePerToken: metrics.averageTimePerToken,
+                        peakMemoryUsage: metrics.peakMemoryUsage,
+                        modelLoadTime: metrics.modelLoadTime,
+                        contextPrepTime: contextPrepTime
+                    )
+                    performanceMonitor?.recordMetrics(updatedMetrics)
+                }
+                
                 continuation.finish()
             }
         }
@@ -885,7 +998,7 @@ public actor LLMCore {
         _ = llama_sampler_sample(sampler, context, i)
         
         if let logits = llama_get_logits(context) {
-            for (index, token) in protectedTokens.enumerated() {
+            for (_, token) in protectedTokens.enumerated() {
                 if let logit = protectedLogits[token] {
                     logits[Int(token)] = logit
                 }
@@ -1060,6 +1173,9 @@ open class LLM: ObservableObject {
     public let core: LLMCore
     private var isAvailable = true
     private var input: String = ""
+    
+    // Performance monitoring
+    public let performanceMonitor = PerformanceMonitor()
     
     static var isLogSilenced = false
     static func silenceLogging() {
@@ -1293,6 +1409,26 @@ open class LLM: ObservableObject {
             await self.setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
             return self.output
         }
+    }
+    
+    // Performance monitoring methods
+    public func startProfiling() async {
+        performanceMonitor.startProfiling()
+        await core.setPerformanceMonitor(performanceMonitor)
+    }
+    
+    public func stopProfiling() async -> PerformanceReport? {
+        let report = performanceMonitor.stopProfiling()
+        await core.setPerformanceMonitor(nil)
+        return report
+    }
+    
+    public var currentMetrics: PerformanceMetrics? {
+        return performanceMonitor.currentMetrics
+    }
+    
+    public func getPerformanceMetrics() async -> PerformanceMetrics? {
+        return await core.getCurrentMetrics()
     }
     
     public func encode(_ text: borrowing String, shouldAddBOS: Bool = true) async -> [Token] {
