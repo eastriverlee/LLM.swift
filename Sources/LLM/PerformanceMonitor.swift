@@ -11,6 +11,11 @@ public class PerformanceMonitor: ObservableObject {
     private var startTime: Date?
     private var peakMemoryUsage: Int64 = 0
     
+    // Operation timing properties moved from LLMCore
+    private var operationStartTime: Date?
+    private var tokensGeneratedInOperation: Int = 0
+    private var modelLoadStartTime: Date?
+    
     public init() {}
     
     /// Start a new profiling session
@@ -50,6 +55,8 @@ public class PerformanceMonitor: ObservableObject {
     func startOperation() {
         startTime = Date()
         tokenCount = 0
+        operationStartTime = Date()
+        tokensGeneratedInOperation = 0
     }
     
     /// End timing an operation and record metrics
@@ -82,6 +89,54 @@ public class PerformanceMonitor: ObservableObject {
         
         recordMetrics(metrics)
         return metrics
+    }
+    
+    /// Start model loading timing
+    func startModelLoad() {
+        modelLoadStartTime = Date()
+    }
+    
+    /// Record model load time and update metrics
+    func recordModelLoadTime() {
+        if let modelLoadStartTime = modelLoadStartTime {
+            let loadTime = Date().timeIntervalSince(modelLoadStartTime)
+            if let currentMetrics = currentMetrics {
+                let updatedMetrics = PerformanceMetrics(
+                    tokensPerSecond: currentMetrics.tokensPerSecond,
+                    memoryUsage: currentMetrics.memoryUsage,
+                    inferenceTime: currentMetrics.inferenceTime,
+                    contextLength: currentMetrics.contextLength,
+                    tokensGenerated: currentMetrics.tokensGenerated,
+                    averageTimePerToken: currentMetrics.averageTimePerToken,
+                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
+                    modelLoadTime: loadTime,
+                    contextPrepTime: currentMetrics.contextPrepTime
+                )
+                recordMetrics(updatedMetrics)
+            }
+            self.modelLoadStartTime = nil
+        }
+    }
+    
+    /// Increment tokens generated in current operation
+    func incrementTokensGenerated() {
+        tokensGeneratedInOperation += 1
+    }
+    
+    /// Get tokens generated in current operation
+    func getTokensGeneratedInOperation() -> Int {
+        return tokensGeneratedInOperation
+    }
+    
+    /// Check if operation is active
+    func isOperationActive() -> Bool {
+        return operationStartTime != nil
+    }
+    
+    /// Reset operation state
+    func resetOperation() {
+        operationStartTime = nil
+        tokensGeneratedInOperation = 0
     }
     
     /// Get current memory usage

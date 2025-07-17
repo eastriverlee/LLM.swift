@@ -55,11 +55,7 @@ public actor LLMCore {
     
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
-    // Performance monitoring
-    private var performanceMonitor: PerformanceMonitor?
-    private var operationStartTime: Date?
-    private var tokensGeneratedInOperation: Int = 0
-    private var modelLoadStartTime: Date?
+    private unowned var performanceMonitor: PerformanceMonitor?
     
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
@@ -95,11 +91,11 @@ public actor LLMCore {
         performanceMonitor = monitor
     }
     
-    func startProfiling() {
+    private func startProfiling() {
         performanceMonitor?.startProfiling()
     }
     
-    func stopProfiling() -> PerformanceReport {
+    private func stopProfiling() -> PerformanceReport {
         return performanceMonitor?.stopProfiling() ?? PerformanceReport(sessionDuration: 0, metrics: [], averageTokensPerSecond: 0, totalTokensGenerated: 0, peakMemoryUsage: 0)
     }
     
@@ -108,44 +104,24 @@ public actor LLMCore {
     }
     
     private func startOperation() {
-        operationStartTime = Date()
-        tokensGeneratedInOperation = 0
         performanceMonitor?.startOperation()
     }
     
     private func endOperation() -> PerformanceMetrics? {
-        guard operationStartTime != nil else { return nil }
+        guard performanceMonitor?.isOperationActive() == true else { return nil }
         
+        let tokensGenerated = performanceMonitor?.getTokensGeneratedInOperation() ?? 0
         let metrics = performanceMonitor?.endOperation(
-            tokensGenerated: tokensGeneratedInOperation,
+            tokensGenerated: tokensGenerated,
             contextLength: Int(currentTokenCount)
         )
         
-        operationStartTime = nil
-        tokensGeneratedInOperation = 0
+        performanceMonitor?.resetOperation()
         
         return metrics
     }
     
-    private nonisolated func recordModelLoadTime(startTime: Date?, performanceMonitor: PerformanceMonitor?) {
-        if let startTime = startTime {
-            let loadTime = Date().timeIntervalSince(startTime)
-            if let currentMetrics = performanceMonitor?.currentMetrics {
-                let updatedMetrics = PerformanceMetrics(
-                    tokensPerSecond: currentMetrics.tokensPerSecond,
-                    memoryUsage: currentMetrics.memoryUsage,
-                    inferenceTime: currentMetrics.inferenceTime,
-                    contextLength: currentMetrics.contextLength,
-                    tokensGenerated: currentMetrics.tokensGenerated,
-                    averageTimePerToken: currentMetrics.averageTimePerToken,
-                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
-                    modelLoadTime: loadTime,
-                    contextPrepTime: currentMetrics.contextPrepTime
-                )
-                performanceMonitor?.recordMetrics(updatedMetrics)
-            }
-        }
-    }
+
 
     /// Creates a new sampler with the specified parameters.
     /// This method is static and nonisolated to allow it to be called from the actor's initializer,
@@ -195,7 +171,7 @@ public actor LLMCore {
     }
 
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
-        modelLoadStartTime = Date()
+        performanceMonitor?.startModelLoad()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -230,7 +206,7 @@ public actor LLMCore {
     }
 
     deinit {
-        recordModelLoadTime(startTime: modelLoadStartTime, performanceMonitor: performanceMonitor)
+        performanceMonitor?.recordModelLoadTime()
         llama_batch_free(batch)
         llama_free(context)
         if let sampler {
@@ -395,7 +371,7 @@ public actor LLMCore {
                         return continuation.finish() 
                     }
                     let word = decode(token)
-                    tokensGeneratedInOperation += 1
+                    performanceMonitor?.incrementTokensGenerated()
                     continuation.yield(word)
                 }
                 
