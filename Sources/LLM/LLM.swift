@@ -56,6 +56,7 @@ public actor LLMCore {
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
     private unowned var performanceMonitor: PerformanceMonitor?
+    private var modelLoadStartTime: Date?
     
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
@@ -89,6 +90,26 @@ public actor LLMCore {
     // Performance monitoring methods
     func setPerformanceMonitor(_ monitor: PerformanceMonitor?) {
         performanceMonitor = monitor
+        
+        // If we have a stored model load start time, record it now
+        if let startTime = modelLoadStartTime, let monitor = monitor {
+            let loadTime = Date().timeIntervalSince(startTime)
+            if let currentMetrics = monitor.currentMetrics {
+                let updatedMetrics = PerformanceMetrics(
+                    tokensPerSecond: currentMetrics.tokensPerSecond,
+                    memoryUsage: currentMetrics.memoryUsage,
+                    inferenceTime: currentMetrics.inferenceTime,
+                    contextLength: currentMetrics.contextLength,
+                    tokensGenerated: currentMetrics.tokensGenerated,
+                    averageTimePerToken: currentMetrics.averageTimePerToken,
+                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
+                    modelLoadTime: loadTime,
+                    contextPrepTime: currentMetrics.contextPrepTime
+                )
+                monitor.recordMetrics(updatedMetrics)
+            }
+            self.modelLoadStartTime = nil
+        }
     }
     
     private func startProfiling() {
@@ -171,7 +192,8 @@ public actor LLMCore {
     }
 
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
-        performanceMonitor?.startModelLoad()
+        // Store model load start time for when performance monitor is set
+        self.modelLoadStartTime = Date()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -206,7 +228,7 @@ public actor LLMCore {
     }
 
     deinit {
-        performanceMonitor?.recordModelLoadTime()
+        // Model load time is now handled in setPerformanceMonitor
         llama_batch_free(batch)
         llama_free(context)
         if let sampler {
