@@ -14,7 +14,6 @@ public class PerformanceMonitor: ObservableObject {
     // Operation timing properties moved from LLMCore
     private var operationStartTime: Date?
     private var tokensGeneratedInOperation: Int = 0
-    private var modelLoadStartTime: Date?
     
     public init() {}
     
@@ -91,31 +90,24 @@ public class PerformanceMonitor: ObservableObject {
         return metrics
     }
     
-    /// Start model loading timing
-    func startModelLoad() {
-        modelLoadStartTime = Date()
-    }
-    
     /// Record model load time and update metrics
-    func recordModelLoadTime() {
-        if let modelLoadStartTime = modelLoadStartTime {
-            let loadTime = Date().timeIntervalSince(modelLoadStartTime)
-            if let currentMetrics = currentMetrics {
-                let updatedMetrics = PerformanceMetrics(
-                    tokensPerSecond: currentMetrics.tokensPerSecond,
-                    memoryUsage: currentMetrics.memoryUsage,
-                    inferenceTime: currentMetrics.inferenceTime,
-                    contextLength: currentMetrics.contextLength,
-                    tokensGenerated: currentMetrics.tokensGenerated,
-                    averageTimePerToken: currentMetrics.averageTimePerToken,
-                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
-                    modelLoadTime: loadTime,
-                    contextPrepTime: currentMetrics.contextPrepTime
-                )
-                recordMetrics(updatedMetrics)
-            }
-            self.modelLoadStartTime = nil
-        }
+    func recordModelLoadTime(_ time: TimeInterval) {
+        let existingMetrics = (self.currentMetrics != nil) ? self.currentMetrics! : PerformanceMetrics.initial()
+        
+        let updatedMetrics = PerformanceMetrics(
+            tokensPerSecond: existingMetrics.tokensPerSecond,
+            memoryUsage: existingMetrics.memoryUsage,
+            inferenceTime: existingMetrics.inferenceTime,
+            contextLength: existingMetrics.contextLength,
+            tokensGenerated: existingMetrics.tokensGenerated,
+            averageTimePerToken: existingMetrics.averageTimePerToken,
+            peakMemoryUsage: existingMetrics.peakMemoryUsage,
+            modelLoadTime: time,
+            contextPrepTime: existingMetrics.contextPrepTime
+        )
+        
+        // Only update currentMetrics, don't record to session unless profiling
+        self.currentMetrics = updatedMetrics
     }
     
     /// Increment tokens generated in current operation

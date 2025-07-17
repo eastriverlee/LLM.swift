@@ -42,4 +42,16 @@ public struct PerformanceMetrics: Codable, Equatable {
         self.modelLoadTime = modelLoadTime
         self.contextPrepTime = contextPrepTime
     }
+    
+    static func initial() -> Self {
+        PerformanceMetrics(
+            tokensPerSecond: 0,
+            memoryUsage: 0,
+            inferenceTime: 0,
+            contextLength: 0,
+            tokensGenerated: 0,
+            averageTimePerToken: 0,
+            peakMemoryUsage: 0
+        )
+    }
 }

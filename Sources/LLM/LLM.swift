@@ -56,7 +56,9 @@ public actor LLMCore {
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
     private unowned var performanceMonitor: PerformanceMonitor?
-    private var modelLoadStartTime: Date?
+    
+    // Store model load time for when monitor is set later
+    private var modelLoadTime: TimeInterval = 0
     
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
@@ -91,24 +93,9 @@ public actor LLMCore {
     func setPerformanceMonitor(_ monitor: PerformanceMonitor?) {
         performanceMonitor = monitor
         
-        // If we have a stored model load start time, record it now
-        if let startTime = modelLoadStartTime, let monitor = monitor {
-            let loadTime = Date().timeIntervalSince(startTime)
-            if let currentMetrics = monitor.currentMetrics {
-                let updatedMetrics = PerformanceMetrics(
-                    tokensPerSecond: currentMetrics.tokensPerSecond,
-                    memoryUsage: currentMetrics.memoryUsage,
-                    inferenceTime: currentMetrics.inferenceTime,
-                    contextLength: currentMetrics.contextLength,
-                    tokensGenerated: currentMetrics.tokensGenerated,
-                    averageTimePerToken: currentMetrics.averageTimePerToken,
-                    peakMemoryUsage: currentMetrics.peakMemoryUsage,
-                    modelLoadTime: loadTime,
-                    contextPrepTime: currentMetrics.contextPrepTime
-                )
-                monitor.recordMetrics(updatedMetrics)
-            }
-            self.modelLoadStartTime = nil
+        // Record model load time if we have it stored and monitor is now available
+        if let monitor = monitor {
+            monitor.recordModelLoadTime(modelLoadTime)
         }
     }
     
@@ -192,8 +179,6 @@ public actor LLMCore {
     }
 
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
-        // Store model load start time for when performance monitor is set
-        self.modelLoadStartTime = Date()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -211,9 +196,13 @@ public actor LLMCore {
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         self.params = contextParams
+        
+        // Measure actual model loading time
+        let modelLoadStart = Date()
         guard let context = llama_init_from_model(model, params) else {
             throw LLMError.contextCreationFailed
         }
+        self.modelLoadTime = Date().timeIntervalSince(modelLoadStart)
         self.context = context
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
         // Use static method to create initial sampler since actor initializers are nonisolated
@@ -228,7 +217,6 @@ public actor LLMCore {
     }
 
     deinit {
-        // Model load time is now handled in setPerformanceMonitor
         llama_batch_free(batch)
         llama_free(context)
         if let sampler {
@@ -374,31 +362,15 @@ public actor LLMCore {
                 while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                     let token = predictNextToken()
                     guard token != endToken else { 
-                        let metrics = endOperation()
-                        // Update metrics with context prep time
-                        if let metrics = metrics {
-                            let updatedMetrics = PerformanceMetrics(
-                                tokensPerSecond: metrics.tokensPerSecond,
-                                memoryUsage: metrics.memoryUsage,
-                                inferenceTime: metrics.inferenceTime,
-                                contextLength: metrics.contextLength,
-                                tokensGenerated: metrics.tokensGenerated,
-                                averageTimePerToken: metrics.averageTimePerToken,
-                                peakMemoryUsage: metrics.peakMemoryUsage,
-                                modelLoadTime: metrics.modelLoadTime,
-                                contextPrepTime: contextPrepTime
-                            )
-                            performanceMonitor?.recordMetrics(updatedMetrics)
-                        }
-                        return continuation.finish() 
+                        break
                     }
                     let word = decode(token)
                     performanceMonitor?.incrementTokensGenerated()
                     continuation.yield(word)
                 }
                 
+                // Record metrics after the loop ends (regardless of how it ended)
                 let metrics = endOperation()
-                // Update metrics with context prep time
                 if let metrics = metrics {
                     let updatedMetrics = PerformanceMetrics(
                         tokensPerSecond: metrics.tokensPerSecond,
