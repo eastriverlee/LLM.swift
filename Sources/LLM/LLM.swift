@@ -55,6 +55,11 @@ public actor LLMCore {
     
     private var sampler: UnsafeMutablePointer<llama_sampler>?
     
+    private unowned var performanceMonitor: PerformanceMonitor?
+    
+    // Store model load time for when monitor is set later
+    private var modelLoadTime: TimeInterval = 0
+    
     func setParameters(seed: UInt32? = nil, topK: Int32? = nil, topP: Float? = nil, temp: Float? = nil, repeatPenalty: Float? = nil, repetitionLookback: Int32? = nil) {
         if let seed { self.seed = seed }
         if let topK { self.topK = topK }
@@ -64,7 +69,15 @@ public actor LLMCore {
         if let repetitionLookback { self.repetitionLookback = repetitionLookback }
         
         if seed != nil || topK != nil || topP != nil || temp != nil || repeatPenalty != nil || repetitionLookback != nil {
-            recreateSampler()
+            self.sampler = recreateSampler(
+                sampler: self.sampler,
+                repetitionLookback: self.repetitionLookback,
+                repeatPenalty: self.repeatPenalty,
+                topK: self.topK,
+                topP: self.topP,
+                temp: self.temp,
+                seed: self.seed
+            )
         }
     }
     
@@ -76,21 +89,87 @@ public actor LLMCore {
         }
     }
     
-    private func recreateSampler() {
+    // Performance monitoring methods
+    func setPerformanceMonitor(_ monitor: PerformanceMonitor?) {
+        performanceMonitor = monitor
+        
+        // Record model load time if we have it stored and monitor is now available
+        if let monitor = monitor {
+            monitor.recordModelLoadTime(modelLoadTime)
+        }
+    }
+    
+    func getCurrentMetrics() -> PerformanceMetrics? {
+        return performanceMonitor?.currentMetrics
+    }
+    
+    private func startOperation() {
+        performanceMonitor?.startOperation()
+    }
+    
+    private func endOperation() -> PerformanceMetrics? {
+        guard performanceMonitor?.isOperationActive() == true else { return nil }
+        
+        let tokensGenerated = performanceMonitor?.getTokensGeneratedInOperation() ?? 0
+        let metrics = performanceMonitor?.endOperation(
+            tokensGenerated: tokensGenerated,
+            contextLength: Int(currentTokenCount)
+        )
+        
+        performanceMonitor?.resetOperation()
+        
+        return metrics
+    }
+    
+
+
+    /// Creates a new sampler with the specified parameters.
+    /// This method is static and nonisolated to allow it to be called from the actor's initializer,
+    /// which is a nonisolated context. Actor initializers cannot call instance methods or access
+    /// instance properties, so we need a static method that doesn't depend on instance state.
+    private nonisolated static func createSampler(
+        repetitionLookback: Int32,
+        repeatPenalty: Float,
+        topK: Int32,
+        topP: Float,
+        temp: Float,
+        seed: UInt32
+    ) -> UnsafeMutablePointer<llama_sampler>? {
+        let samplerParams = llama_sampler_chain_default_params()
+        let newSampler = llama_sampler_chain_init(samplerParams)
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_top_k(topK))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_top_p(topP, 1))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_temp(temp))
+        llama_sampler_chain_add(newSampler!, llama_sampler_init_dist(seed))
+        return newSampler
+    }
+    
+    /// Recreates the sampler with new parameters, freeing the old one if it exists.
+    /// This method is actor-isolated since it's called from instance methods that can access
+    /// actor state. It delegates the actual sampler creation to the static createSampler method.
+    private func recreateSampler(
+        sampler: UnsafeMutablePointer<llama_sampler>?,
+        repetitionLookback: Int32,
+        repeatPenalty: Float,
+        topK: Int32,
+        topP: Float,
+        temp: Float,
+        seed: UInt32
+    ) -> UnsafeMutablePointer<llama_sampler>? {
         if let sampler {
             llama_sampler_free(sampler)
         }
-        
-        let samplerParams = llama_sampler_chain_default_params()
-        sampler = llama_sampler_chain_init(samplerParams)
-        
-        llama_sampler_chain_add(sampler!, llama_sampler_init_penalties(repetitionLookback, repeatPenalty, 0, 0))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_top_k(topK))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_top_p(topP, 1))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_temp(temp))
-        llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
+        return Self.createSampler(
+            repetitionLookback: repetitionLookback,
+            repeatPenalty: repeatPenalty,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            seed: seed
+        )
     }
-    
+
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
         self.model = model
         self.vocab = llama_model_get_vocab(model)
@@ -102,7 +181,6 @@ public actor LLMCore {
         self.repetitionLookback = repetitionLookback
         self.maxTokenCount = maxTokenCount
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
-        
         var contextParams = llama_context_default_params()
         let processorCount = Int32(ProcessInfo().processorCount)
         contextParams.n_ctx = UInt32(maxTokenCount)
@@ -111,16 +189,25 @@ public actor LLMCore {
         contextParams.n_threads_batch = processorCount
         self.params = contextParams
         
+        // Measure actual model loading time
+        let modelLoadStart = Date()
         guard let context = llama_init_from_model(model, params) else {
             throw LLMError.contextCreationFailed
         }
+        self.modelLoadTime = Date().timeIntervalSince(modelLoadStart)
         self.context = context
-        
         self.batch = llama_batch_init(Int32(maxTokenCount), 0, 1)
-        
-        recreateSampler()
+        // Use static method to create initial sampler since actor initializers are nonisolated
+        self.sampler = Self.createSampler(
+            repetitionLookback: repetitionLookback,
+            repeatPenalty: repeatPenalty,
+            topK: topK,
+            topP: topP,
+            temp: temp,
+            seed: seed
+        )
     }
-    
+
     deinit {
         llama_batch_free(batch)
         llama_free(context)
@@ -253,15 +340,44 @@ public actor LLMCore {
     func generateResponseStream(from input: String) -> AsyncStream<String> {
         return AsyncStream<String> { continuation in
             Task {
-                guard prepareContext(for: input) else { return continuation.finish() }
+                startOperation()
+                
+                let contextPrepStart = Date()
+                guard prepareContext(for: input) else { 
+                    _ = endOperation()
+                    return continuation.finish() 
+                }
+                let contextPrepTime = Date().timeIntervalSince(contextPrepStart)
+                
                 if let sampler { llama_sampler_reset(sampler) }
                 
                 while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                     let token = predictNextToken()
-                    guard token != endToken else { return continuation.finish() }
+                    guard token != endToken else { 
+                        break
+                    }
                     let word = decode(token)
+                    performanceMonitor?.incrementTokensGenerated()
                     continuation.yield(word)
                 }
+                
+                // Record metrics after the loop ends (regardless of how it ended)
+                let metrics = endOperation()
+                if let metrics = metrics {
+                    let updatedMetrics = PerformanceMetrics(
+                        tokensPerSecond: metrics.tokensPerSecond,
+                        memoryUsage: metrics.memoryUsage,
+                        inferenceTime: metrics.inferenceTime,
+                        contextLength: metrics.contextLength,
+                        tokensGenerated: metrics.tokensGenerated,
+                        averageTimePerToken: metrics.averageTimePerToken,
+                        peakMemoryUsage: metrics.peakMemoryUsage,
+                        modelLoadTime: metrics.modelLoadTime,
+                        contextPrepTime: contextPrepTime
+                    )
+                    performanceMonitor?.recordMetrics(updatedMetrics)
+                }
+                
                 continuation.finish()
             }
         }
@@ -885,7 +1001,7 @@ public actor LLMCore {
         _ = llama_sampler_sample(sampler, context, i)
         
         if let logits = llama_get_logits(context) {
-            for (index, token) in protectedTokens.enumerated() {
+            for (_, token) in protectedTokens.enumerated() {
                 if let logit = protectedLogits[token] {
                     logits[Int(token)] = logit
                 }
@@ -1061,6 +1177,9 @@ open class LLM: ObservableObject {
     private var isAvailable = true
     private var input: String = ""
     
+    // Performance monitoring
+    public let performanceMonitor = PerformanceMonitor()
+    
     static var isLogSilenced = false
     static func silenceLogging() {
         guard !isLogSilenced else { return }
@@ -1127,6 +1246,9 @@ open class LLM: ObservableObject {
                     await core.setStopSequence(stopSequence)
                 }
             }
+            
+            await core.setPerformanceMonitor(performanceMonitor)
+            
         } catch {
             llama_model_free(model)
             return nil
@@ -1293,6 +1415,26 @@ open class LLM: ObservableObject {
             await self.setOutput(to: trimmedOutput.isEmpty ? "..." : trimmedOutput)
             return self.output
         }
+    }
+    
+    // Performance monitoring methods
+    public func startProfiling() async {
+        performanceMonitor.startProfiling()
+        await core.setPerformanceMonitor(performanceMonitor)
+    }
+    
+    public func stopProfiling() async -> PerformanceReport? {
+        let report = performanceMonitor.stopProfiling()
+        await core.setPerformanceMonitor(nil)
+        return report
+    }
+    
+    public var currentMetrics: PerformanceMetrics? {
+        return performanceMonitor.currentMetrics
+    }
+    
+    public func getPerformanceMetrics() async -> PerformanceMetrics? {
+        return await core.getCurrentMetrics()
     }
     
     public func encode(_ text: borrowing String, shouldAddBOS: Bool = true) async -> [Token] {
