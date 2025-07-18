@@ -99,14 +99,6 @@ public actor LLMCore {
         }
     }
     
-    private func startProfiling() {
-        performanceMonitor?.startProfiling()
-    }
-    
-    private func stopProfiling() -> PerformanceReport {
-        return performanceMonitor?.stopProfiling() ?? PerformanceReport(sessionDuration: 0, metrics: [], averageTokensPerSecond: 0, totalTokensGenerated: 0, peakMemoryUsage: 0)
-    }
-    
     func getCurrentMetrics() -> PerformanceMetrics? {
         return performanceMonitor?.currentMetrics
     }
@@ -1254,6 +1246,9 @@ open class LLM: ObservableObject {
                     await core.setStopSequence(stopSequence)
                 }
             }
+            
+            await core.setPerformanceMonitor(performanceMonitor)
+            
         } catch {
             llama_model_free(model)
             return nil
