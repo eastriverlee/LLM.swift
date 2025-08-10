@@ -176,22 +176,21 @@ public actor LLMCore {
     func prepareContext(for input: String) -> Bool {
         guard !input.isEmpty else { return false }
         
-        currentTokenCount = 0
         tokenBuffer.removeAll()
         
         var tokens = encode(input)
         if tokens.last == nullToken { tokens.removeLast() }
         
         let initialCount = tokens.count
-        guard maxTokenCount > initialCount else { return false }
+        guard maxTokenCount > initialCount + Int(currentTokenCount) else { return false }
         
         clearBatch()
         for (i, token) in tokens.enumerated() {
-            addToBatch(token: token, pos: Int32(i), isLogit: i == initialCount - 1)
+            addToBatch(token: token, pos: currentTokenCount + Int32(i), isLogit: i == initialCount - 1)
         }
         guard llama_decode(context, batch) == 0 else { return false }
         
-        currentTokenCount = Int32(initialCount)
+        currentTokenCount += Int32(initialCount)
         shouldContinuePredicting = true
         return true
     }
@@ -250,6 +249,14 @@ public actor LLMCore {
         shouldContinuePredicting = false
     }
     
+    func resetContext() {
+        currentTokenCount = 0
+        tokenBuffer.removeAll()
+        shouldContinuePredicting = false
+        // Clear all sequences to ensure clean state
+        llama_memory_seq_rm(llama_get_memory(context), -1, -1, -1)
+    }
+    
     func generateResponseStream(from input: String) -> AsyncStream<String> {
         return AsyncStream<String> { continuation in
             Task {
@@ -271,8 +278,11 @@ public actor LLMCore {
         guard !input.isEmpty else { throw LLMError.inputTooLong }
         
         llama_set_embeddings(context, true)
-        defer { llama_set_embeddings(context, false) }
+        defer { 
+            llama_set_embeddings(context, false)
+        }
         
+        // Clear embeddings sequence to ensure deterministic results
         llama_memory_seq_rm(llama_get_memory(context), 1, -1, -1)
         
         let cleanTokens = prepareTokensForEmbeddings(from: input)
@@ -1237,6 +1247,10 @@ open class LLM: ObservableObject {
         Task { await core.stopGeneration() }
     }
     
+    public func reset() {
+        history.removeAll()
+        Task { await core.resetContext() }
+    }
     
     open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
         output.yield("TL;DR")

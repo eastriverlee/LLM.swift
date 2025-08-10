@@ -311,6 +311,51 @@ final class LLMTests {
         #expect(embeddings2 == embeddings3)
         #expect(embeddings1 == embeddings3)
     }
+    
+    @Test
+    func testMultiTurnConversationAfterEmbeddings() async throws {
+        let bot = try await LLM(from: model)!
+        
+        // First turn should work
+        await bot.respond(to: "Say hello")
+        let firstResponse = bot.output
+        #expect(!firstResponse.isEmpty)
+        #expect(firstResponse != "...")
+        
+        // Get embeddings (this might contaminate the context)
+        _ = try await bot.getEmbeddings("test embeddings")
+        
+        // Second turn should still work but currently fails
+        await bot.respond(to: "Say goodbye")
+        let secondResponse = bot.output
+        #expect(!secondResponse.isEmpty)
+        #expect(secondResponse != "...")
+        #expect(secondResponse != firstResponse)
+    }
+    
+    @Test
+    func testMultiTurnConversationWithoutEmbeddings() async throws {
+        let bot = try await LLM(from: model)!
+        
+        // First turn
+        await bot.respond(to: "Say hello")
+        let firstResponse = bot.output
+        #expect(!firstResponse.isEmpty)
+        #expect(firstResponse != "...")
+        
+        // Second turn without any embeddings interference
+        await bot.respond(to: "Say goodbye")
+        let secondResponse = bot.output
+        #expect(!secondResponse.isEmpty)
+        #expect(secondResponse != "...")
+        #expect(secondResponse != firstResponse)
+        
+        // Third turn to confirm the pattern
+        await bot.respond(to: "What is 1+1?")
+        let thirdResponse = bot.output
+        #expect(!thirdResponse.isEmpty)
+        #expect(thirdResponse != "...")
+    }
 
     //MARK: Generatable macro tests
     
