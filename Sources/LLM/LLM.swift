@@ -338,7 +338,7 @@ public actor LLMCore {
         return debugLastGeneratedTokens
     }
     
-    func generateWithConstraints(from input: String, jsonSchema: String) throws -> String {
+    public func generateWithConstraints(from input: String, jsonSchema: String) throws -> String {
         debugLastGeneratedTokens = []
         guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
         guard let parsedSchema = parseJSONSchema(jsonSchema) else { throw LLMError.contextCreationFailed }
