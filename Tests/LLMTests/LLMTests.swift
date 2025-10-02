@@ -779,4 +779,56 @@ final class LLMTests {
         #expect(assignee["name"] is String)
         #expect(assignee["age"] is Int)
     }
+    
+    @Generatable
+    struct EmptyTestStruct { }
+    
+    @Test
+    func testEmptyGeneratable() async throws {
+        let bot = try await LLM(from: model)!
+        
+        let result = try await bot.respond(
+            to: "Create the void",
+            as: EmptyTestStruct.self
+        )
+        let project = result.value
+        let output = result.rawOutput
+        
+        print("Project: \(project)")
+        print("Raw output: \(output)")
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        #expect(parsed.isEmpty)
+    }
+    
+    @Generatable
+    struct AllNullableAttributes {
+        let first: Int?
+        let second: Int?
+    }
+    
+    @Test
+    func testStructWithNullableAttributes() async throws {
+        let bot = try await LLM(from: model)!
+        
+        print(AllNullableAttributes.jsonSchema)
+        
+        // Note: it seems it is hard to tell this LLM to return an empty JSON or drop an attribute,
+        // so stick to just simple type checking
+        let result = try await bot.respond(
+            to: "Return something",
+            as: AllNullableAttributes.self
+        )
+        let project = result.value
+        let output = result.rawOutput
+        
+        print("Project: \(project)")
+        print("Raw output: \(output)")
+        
+        let jsonData = output.data(using: String.Encoding.utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        #expect(parsed["first"] is Int?)
+        #expect(parsed["second"] is Int?)
+    }
 }
