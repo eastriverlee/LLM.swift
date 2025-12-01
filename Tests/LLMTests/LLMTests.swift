@@ -779,4 +779,37 @@ final class LLMTests {
         #expect(assignee["name"] is String)
         #expect(assignee["age"] is Int)
     }
+    
+    @Generatable
+    struct EmptyTestStruct { }
+    
+    @Test
+    func testEmptyStructJsonSchema() throws {
+        let schema = EmptyTestStruct.jsonSchema
+        let jsonData = schema.data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        
+        #expect(parsed["type"] as? String == "object")
+        #expect((parsed["properties"] as? [String: Any])?.isEmpty == true)
+        #expect((parsed["required"] as? [String])?.isEmpty == true)
+    }
+    
+    @Generatable
+    struct AllOptionalProperties {
+        let first: Int?
+        let second: Int?
+    }
+    
+    @Test
+    func testAllOptionalPropertiesJsonSchema() throws {
+        let schema = AllOptionalProperties.jsonSchema
+        let jsonData = schema.data(using: .utf8)!
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+        
+        #expect(parsed["type"] as? String == "object")
+        let properties = parsed["properties"] as! [String: Any]
+        #expect(properties.keys.contains("first"))
+        #expect(properties.keys.contains("second"))
+        #expect((parsed["required"] as? [String])?.isEmpty == true)
+    }
 }

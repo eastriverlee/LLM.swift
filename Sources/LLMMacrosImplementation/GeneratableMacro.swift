@@ -33,12 +33,15 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
             let schemaExpr = schema(for: unwrappedType, in: declaration, context: context)
             return (name, schemaExpr, !isOptional)
         }
+        let emptyStringToken = "\"\""
         let propertyExprsString = props.map { "\"\\\"" + $0.name + "\\\": \" + " + $0.schema }.joined(separator: " + \",\" + ")
+        let propertyExprsStringFinal = propertyExprsString.isEmpty ? emptyStringToken : propertyExprsString
         let requiredExprString = props.filter { $0.isRequired }.map { "\"\\\"" + $0.name + "\\\"\"" }.joined(separator: " + \",\" + ")
+        let requiredExprStringFinal = requiredExprString.isEmpty ? emptyStringToken : requiredExprString
         return [
             """
             public static var jsonSchema: String {
-                return "{ \\"type\\": \\"object\\", \\"properties\\": {" + \(raw: propertyExprsString) + "}, \\"required\\": [" + \(raw: requiredExprString) + "] }"
+                return "{ \\"type\\": \\"object\\", \\"properties\\": {" + \(raw: propertyExprsStringFinal) + "}, \\"required\\": [" + \(raw: requiredExprStringFinal) + "] }"
             }
             """
         ]
