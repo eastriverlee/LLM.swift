@@ -109,6 +109,7 @@ public actor LLMCore {
         contextParams.n_batch = contextParams.n_ctx
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
+        contextParams.embeddings = true
         self.params = contextParams
         
         guard let context = llama_init_from_model(model, params) else {
@@ -282,13 +283,16 @@ public actor LLMCore {
             llama_set_embeddings(context, false)
         }
         
-        // Clear embeddings sequence to ensure deterministic results
-        llama_memory_seq_rm(llama_get_memory(context), 1, -1, -1)
+        llama_memory_clear(llama_get_memory(context), false)
         
         let cleanTokens = prepareTokensForEmbeddings(from: input)
         try processBatchForEmbeddings(cleanTokens)
         
-        return try extractEmbeddingsFromContext()
+        let embeddings = try extractEmbeddingsFromContext()
+        
+        llama_memory_clear(llama_get_memory(context), false)
+        
+        return embeddings
     }
     
     private func prepareTokensForEmbeddings(from input: String) -> [Token] {
@@ -314,14 +318,16 @@ public actor LLMCore {
         batch.pos[i] = pos
         batch.n_seq_id[i] = 1
         if let seq_id = batch.seq_id[i] {
-            seq_id[0] = 1
+            seq_id[0] = 0
         }
         batch.logits[i] = isLogit ? 1 : 0
         batch.n_tokens += 1
     }
     
     private func extractEmbeddingsFromContext() throws -> [Float] {
-        guard let embeddingsPtr = llama_get_embeddings(context) else { throw LLMError.embeddingsFailed }
+        guard let embeddingsPtr = llama_get_embeddings_ith(context, -1) else {
+            throw LLMError.embeddingsFailed
+        }
         
         let embeddingDimension = Int(llama_model_n_embd(model))
         var embeddingsArray: [Float] = []
@@ -895,7 +901,7 @@ public actor LLMCore {
         _ = llama_sampler_sample(sampler, context, i)
         
         if let logits = llama_get_logits(context) {
-            for (index, token) in protectedTokens.enumerated() {
+            for token in protectedTokens {
                 if let logit = protectedLogits[token] {
                     logits[Int(token)] = logit
                 }
@@ -1525,10 +1531,10 @@ public struct HuggingFaceModel {
         self.filterRegexPattern = filterRegexPattern
     }
     
-    public init(_ name: String, _ quantization: Quantization = .Q4_K_M, template: Template) {
+    public init(_ name: String, _ quantization: Quantization? = .Q4_K_M, template: Template) {
         self.name = name
         self.template = template
-        self.filterRegexPattern = "(?i)\(quantization.rawValue)"
+        self.filterRegexPattern = quantization.map { "(?i)\($0.rawValue)" } ?? ".*"
     }
     
     package func getDownloadURLStrings() async throws -> [String] {

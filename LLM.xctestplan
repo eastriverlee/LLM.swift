@@ -1,0 +1,29 @@
+{
+  "configurations" : [
+    {
+      "id" : "9A5E1C2F-8B3D-4E7A-9F1C-2D3E4F5A6B7C",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "testExecutionOrdering" : "alphabetical",
+    "maximumTestExecutionTimeAllowance" : 600,
+    "maximumTestRepetitions" : 3,
+    "testRepetitionMode" : "retryOnFailure",
+    "parallelTestExecution" : false
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "LLMTests",
+        "name" : "LLMTests"
+      }
+    }
+  ],
+  "version" : 1
+}
+
