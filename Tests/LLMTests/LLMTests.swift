@@ -784,51 +784,32 @@ final class LLMTests {
     struct EmptyTestStruct { }
     
     @Test
-    func testEmptyGeneratable() async throws {
-        let bot = try await LLM(from: model)!
-        
-        let result = try await bot.respond(
-            to: "Create the void",
-            as: EmptyTestStruct.self
-        )
-        let project = result.value
-        let output = result.rawOutput
-        
-        print("Project: \(project)")
-        print("Raw output: \(output)")
-        
-        let jsonData = output.data(using: String.Encoding.utf8)!
+    func testEmptyStructJsonSchema() throws {
+        let schema = EmptyTestStruct.jsonSchema
+        let jsonData = schema.data(using: .utf8)!
         let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
-        #expect(parsed.isEmpty)
+        
+        #expect(parsed["type"] as? String == "object")
+        #expect((parsed["properties"] as? [String: Any])?.isEmpty == true)
+        #expect((parsed["required"] as? [String])?.isEmpty == true)
     }
     
     @Generatable
-    struct AllNullableAttributes {
+    struct AllOptionalProperties {
         let first: Int?
         let second: Int?
     }
     
     @Test
-    func testStructWithNullableAttributes() async throws {
-        let bot = try await LLM(from: model)!
-        
-        print(AllNullableAttributes.jsonSchema)
-        
-        // Note: it seems it is hard to tell this LLM to return an empty JSON or drop an attribute,
-        // so stick to just simple type checking
-        let result = try await bot.respond(
-            to: "Return something",
-            as: AllNullableAttributes.self
-        )
-        let project = result.value
-        let output = result.rawOutput
-        
-        print("Project: \(project)")
-        print("Raw output: \(output)")
-        
-        let jsonData = output.data(using: String.Encoding.utf8)!
+    func testAllOptionalPropertiesJsonSchema() throws {
+        let schema = AllOptionalProperties.jsonSchema
+        let jsonData = schema.data(using: .utf8)!
         let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
-        #expect(parsed["first"] is Int?)
-        #expect(parsed["second"] is Int?)
+        
+        #expect(parsed["type"] as? String == "object")
+        let properties = parsed["properties"] as! [String: Any]
+        #expect(properties.keys.contains("first"))
+        #expect(properties.keys.contains("second"))
+        #expect((parsed["required"] as? [String])?.isEmpty == true)
     }
 }

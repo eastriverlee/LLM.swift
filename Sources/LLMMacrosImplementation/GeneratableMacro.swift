@@ -33,7 +33,7 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
             let schemaExpr = schema(for: unwrappedType, in: declaration, context: context)
             return (name, schemaExpr, !isOptional)
         }
-        let emptyStringToken="\"\""
+        let emptyStringToken = "\"\""
         let propertyExprsString = props.map { "\"\\\"" + $0.name + "\\\": \" + " + $0.schema }.joined(separator: " + \",\" + ")
         let propertyExprsStringFinal = propertyExprsString.isEmpty ? emptyStringToken : propertyExprsString
         let requiredExprString = props.filter { $0.isRequired }.map { "\"\\\"" + $0.name + "\\\"\"" }.joined(separator: " + \",\" + ")
