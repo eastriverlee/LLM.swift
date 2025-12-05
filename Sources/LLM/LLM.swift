@@ -40,7 +40,13 @@ public actor LLMCore {
     
     private let maxTokenCount: Int
     private let totalTokenCount: Int
-    private lazy var newlineToken: Token = llama_vocab_nl(vocab)
+    
+    public lazy var newlineToken: Token = llama_vocab_nl(vocab)
+    public lazy var endOfTurnToken: Token = llama_vocab_eot(vocab)
+    public lazy var separatorToken: Token = llama_vocab_sep(vocab)
+    public lazy var paddingToken: Token = llama_vocab_pad(vocab)
+    
+    public lazy var startToken: Token = llama_vocab_bos(vocab)
     private lazy var endToken: Token = llama_vocab_eos(vocab)
     private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
     private lazy var quoteToken: Token = encode("\"", shouldAddBOS: false, special: false).first!
@@ -145,21 +151,22 @@ public actor LLMCore {
         return tokens
     }
     
-    public func decode(_ token: Token) -> String {
-        if let cached = tokenDecodeCache.object(forKey: NSNumber(value: token)) {
+    public func decode(_ token: Token, special: Bool = false) -> String {
+        let cacheKey = special ? token + Int32(totalTokenCount) : token
+        if let cached = tokenDecodeCache.object(forKey: NSNumber(value: cacheKey)) {
             return cached as String
         }
         
         var bufferLength = 16
         var buffer: [CChar] = .init(repeating: 0, count: bufferLength)
-        var actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
+        var actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, special))
         
         guard actualLength != 0 else { return "" }
         
         if actualLength < 0 {
             bufferLength = -actualLength
             buffer = .init(repeating: 0, count: bufferLength)
-            actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, false))
+            actualLength = Int(llama_token_to_piece(vocab, token, &buffer, Int32(bufferLength), 0, special))
             guard actualLength > 0 else { return "" }
         }
         
@@ -171,9 +178,14 @@ public actor LLMCore {
             decoded = decoded.filter { $0 != "\0" }
         }
         
-        tokenDecodeCache.setObject(decoded as NSString, forKey: NSNumber(value: token))
+        tokenDecodeCache.setObject(decoded as NSString, forKey: NSNumber(value: cacheKey))
         
         return decoded
+    }
+    
+    public func getChatTemplateHint() -> String? {
+        guard let template = llama_model_chat_template(model, nil) else { return nil }
+        return String(cString: template)
     }
     
     
