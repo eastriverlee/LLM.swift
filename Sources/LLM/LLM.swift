@@ -18,6 +18,7 @@ public typealias Vocab = OpaquePointer
 /// A chat message consisting of a role and content.
 public typealias Chat = (role: Role, content: String)
 
+
 /// Core actor responsible for thread-safe interactions with the llama.cpp library.
 ///
 /// `LLMCore` handles low-level operations including token encoding/decoding,
@@ -92,6 +93,7 @@ public actor LLMCore {
     }
     
     public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
+        LLM.ensureInitialized()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
         self.seed = seed
@@ -128,6 +130,7 @@ public actor LLMCore {
         if let sampler {
             llama_sampler_free(sampler)
         }
+        llama_model_free(model)
     }
     
     
@@ -1074,10 +1077,21 @@ open class LLM: ObservableObject {
     public var path: [CChar]
     
     public let core: LLMCore
+    
     private var isAvailable = true
     private var input: String = ""
     
     static var isLogSilenced = false
+    
+    fileprivate static func ensureInitialized() {
+        struct Initialization {
+            static let invoke: Void = {
+                llama_backend_init()
+            }()
+        }
+        _ = Initialization.invoke
+    }
+
     static func silenceLogging() {
         guard !isLogSilenced else { return }
         isLogSilenced = true
@@ -1241,7 +1255,7 @@ open class LLM: ObservableObject {
     }
     
     deinit {
-        llama_model_free(model)
+        // Model is freed by LLMCore
     }
     
     
