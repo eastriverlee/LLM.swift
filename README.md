@@ -53,7 +53,15 @@ struct BotView: View {
     func stop() { bot.stop() }
     var body: some View {
         VStack(alignment: .leading) {
-            ScrollView { Text(bot.output).monospaced() }
+            ScrollView {
+                if !bot.thinking.isEmpty {
+                    Text(bot.thinking)
+                        .foregroundStyle(.gray)
+                        .monospaced()
+                        .padding(.bottom, 8)
+                }
+                Text(bot.output).monospaced()
+            }
             Spacer()
             HStack {
                 ZStack {
@@ -237,9 +245,10 @@ open func respond(to input: String) async {
 > as you can see, `func respond(to input: String) async` has an `open` access, so that you can override it when your class inherits `LLM` and want some fine grained control over.
 
 there are three functions users can define when initializing `LLM` class:
-* `var preprocess: (_ input: String, _ history: [Chat]) -> String`
+* `var preprocess: (_ input: String, _ history: [Chat], _ thinking: ThinkingMode) -> String`
 * `var postprocess: (_ output: String) -> Void`
 * `var update: (_ outputDelta: String?) -> Void`
+* `var updateThinking: (_ thinkingDelta: String?) -> Void`
 they are used in `respond` function.
 
 ### preprocess
@@ -256,7 +265,7 @@ USER PROMPT<|im_end|>
 
 to use this chat format, you should use a function that goes like this:
 ```swift
-self.preprocess = { input, history in
+self.preprocess = { input, history, thinking in
     let systemPrompt = "You are a sentient AI with emotions."
     var processed = "<|im_start|>system\n\(systemPrompt)<|im_end|>\n"
     for chat in history {
@@ -264,6 +273,14 @@ self.preprocess = { input, history in
     }
     processed += "<|im_start|>user\n\(input)<|im_end|>\n"
     processed += "<|im_start|>assistant\n"
+    
+    // Handle thinking mode
+    if thinking == .enabled {
+        processed += "<think>"
+    } else if thinking == .none {
+        processed += "<think></think>"
+    }
+    
     return processed
 }
 ```
@@ -302,6 +319,24 @@ if you use regular `func respond(to input: String) async` `update` function that
 `outputDelta` is `nil` when it stops generating the output.
 
 if you want more control over everything you can use `func respond(to input: String, with makeOutputFrom: @escaping (AsyncStream<String>) async -> String) async` instead, which the aforementioned function uses internally, to define your own version of `makeOutputFrom` function that is used to make `String` typed output out of `AsyncStream<String>` and add to its history. in this case, `update` function will be ignored unless you use it. check `func respond(to input: String) async` implementation shown above to understand how it works.
+
+## Thinking Process (Chain of Thought)
+You can access the model's thinking process separately from the final response. This is useful for models which support Chain of Thought.
+
+```swift
+// Enable thinking when calling respond (defaults to .none)
+// If set to .none, it uses the "nothink" technique to suppress thinking tokens
+await bot.respond(to: input, thinking: .enabled)
+
+// Access the accumulated thinking content
+print(bot.thinking)
+```
+The `thinking` property on your bot instance will contain the accumulated thought process, while `output` contains the final response. The library automatically handles the `<think>` tags and separation.
+
+### ThinkingMode
+- `.enabled`: Forces the model to think by appending the thinking start token. Parses and separates thinking content from the response.
+- `.none`: (Default) Forces the model to skip thinking by appending empty thinking tokens.
+- `.suppressed`: Same as `.none`.
 
 ## Embeddings
 

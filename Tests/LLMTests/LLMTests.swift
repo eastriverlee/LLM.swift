@@ -17,7 +17,7 @@ final class LLMTests {
         <|im_start|>assistant
         
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -32,7 +32,7 @@ final class LLMTests {
         <|im_start|>assistant
         
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -51,7 +51,7 @@ final class LLMTests {
         <|im_start|>assistant
         
         """
-        let output = template.preprocess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history, .none)
         #expect(expected == output)
     }
     
@@ -65,7 +65,7 @@ final class LLMTests {
         ### Response:
         
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -81,7 +81,7 @@ final class LLMTests {
         ### Response:
         
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -103,7 +103,7 @@ final class LLMTests {
         ### Response:
         
         """
-        let output = template.preprocess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history, .none)
         #expect(expected == output)
     }
     
@@ -113,7 +113,7 @@ final class LLMTests {
         let expected = """
         [INST] \(userPrompt) [/INST]
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -127,7 +127,7 @@ final class LLMTests {
 
         \(userPrompt) [/INST]
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -141,7 +141,7 @@ final class LLMTests {
 
         \(history[0].content) [/INST] \(history[1].content)</s><s>[INST] \(userPrompt) [/INST]
         """
-        let output = template.preprocess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history, .none)
         #expect(expected == output)
     }
     
@@ -151,7 +151,7 @@ final class LLMTests {
         let expected = """
         [INST] \(userPrompt) [/INST]
         """
-        let output = template.preprocess(userPrompt, [])
+        let output = template.preprocess(userPrompt, [], .none)
         #expect(expected == output)
     }
     
@@ -161,7 +161,7 @@ final class LLMTests {
         let expected = """
         [INST] \(history[0].content) [/INST]\(history[1].content)</s> [INST] \(userPrompt) [/INST]
         """
-        let output = template.preprocess(userPrompt, history)
+        let output = template.preprocess(userPrompt, history, .none)
         #expect(expected == output)
     }
     
@@ -221,7 +221,7 @@ final class LLMTests {
     func testInitializerWithTempate() async throws {
         let template = model.template
         let bot = try await LLM(from: model)!
-        #expect(bot.preprocess(userPrompt, []) == template.preprocess(userPrompt, []))
+        #expect(bot.preprocess(userPrompt, [], .none) == template.preprocess(userPrompt, [], .none))
     }
     
     @Test
@@ -233,6 +233,35 @@ final class LLMTests {
         let input = "have you heard of this so-called LLM.swift library?"
         await bot.respond(to: input)
         #expect(!bot.output.isEmpty)
+    }
+    
+    @Test
+    func testThinkingOutputSeparation() async throws {
+        let bot = try await LLM(from: model)!
+        let input = "What is 2+2?"
+        
+        await bot.respond(to: input, thinking: .enabled)
+        
+        print("===========thinking===========\n\(bot.thinking)\n===========output===========\n\(bot.output)\n===========end===========")
+        
+        #expect(!bot.output.isEmpty)
+        #expect(!bot.thinking.isEmpty)
+        #expect(!bot.output.contains("<think>"))
+        #expect(!bot.output.contains("</think>"))
+    }
+    
+    @Test
+    func testThinkingOutputSeparationForNoThinkingModel() async throws {
+        let model = HuggingFaceModel("unsloth/gemma-3-4b-it-GGUF", .IQ2_M, template: .gemma)
+        let bot = try await LLM(from: model)!
+        let input = "What is 2+3*5/5? Think hard."
+        
+        await bot.respond(to: input, thinking: .enabled)
+        
+        print("===========thinking===========\n\(bot.thinking)\n===========output===========\n\(bot.output)\n===========end===========")
+        
+        #expect(!bot.output.isEmpty)
+        #expect(!bot.thinking.isEmpty)
     }
     
     @Test
