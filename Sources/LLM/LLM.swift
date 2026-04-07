@@ -53,7 +53,7 @@ public actor LLMCore {
     
     private lazy var startToken: Token = llama_vocab_bos(vocab)
     private lazy var endToken: Token = llama_vocab_eos(vocab)
-    private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first!
+    private lazy var nullToken: Token = encode("\0", shouldAddBOS: false).first ?? Token.min
     private lazy var quoteToken: Token = encode("\"", shouldAddBOS: false, special: false).first!
     private lazy var whitespaceToken: Token = encode(" ", shouldAddBOS: false, special: false).first!
     
