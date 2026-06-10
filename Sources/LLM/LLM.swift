@@ -1461,6 +1461,16 @@ open class LLM: ObservableObject {
         history.removeAll()
         Task { await core.resetContext() }
     }
+
+    /// QuietPilot patch (Sprint 55 US-55.1): structured, AWAITABLE reset. Upstream
+    /// reset() fires `Task { await core.resetContext() }` unawaited, so the KV clear
+    /// races the next generation's prepareContext and can zero the context mid-decode
+    /// (empty/truncated output). Awaiting the clear makes it provably ordered before the
+    /// next respond(). Pinned by github.com/tonyphoang/ios_voice_assistant.
+    public func resetAndWait() async {
+        history.removeAll()
+        await core.resetContext()
+    }
     
     open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
         output.yield("TL;DR")
