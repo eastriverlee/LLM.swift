@@ -211,7 +211,10 @@ public actor LLMCore {
         
         tokenBuffer.removeAll()
         
-        var tokens = encode(input)
+        // BOS belongs only at the very start of the context - when continuing after
+        // kept tokens (multi-turn or a kept prefix), injecting BOS mid-stream skews
+        // the model's state.
+        var tokens = encode(input, shouldAddBOS: currentTokenCount == 0)
         if tokens.last == nullToken { tokens.removeLast() }
         
         let initialCount = tokens.count
@@ -316,6 +319,29 @@ public actor LLMCore {
         shouldContinuePredicting = false
         // Clear all sequences to ensure clean state
         llama_memory_seq_rm(llama_get_memory(context), -1, -1, -1)
+    }
+    
+    /// Like `resetContext()`, but keep the first `n` tokens' KV cells (a previously
+    /// `ingest`ed stable prefix). The next `prepareContext` continues at position
+    /// `n`, skipping re-decode of the prefix - the dominant per-turn latency cost
+    /// when the prefix is a large system prompt.
+    public func resetContext(keepingTokens n: Int32) {
+        guard n > 0 else { return resetContext() }
+        currentTokenCount = n
+        tokenBuffer.removeAll()
+        shouldContinuePredicting = false
+        llama_memory_seq_rm(llama_get_memory(context), -1, n, -1)
+    }
+    
+    /// Decode `text` into the context WITHOUT starting generation - for pre-warming
+    /// a stable prompt prefix (e.g. the formatted system block) whose KV cells are
+    /// then kept across turns via `resetContext(keepingTokens:)`. Returns the total
+    /// token count now in the context (pass it back as `keepingTokens`), or -1 on
+    /// failure.
+    public func ingest(_ text: String) -> Int32 {
+        guard prepareContext(for: text) else { return -1 }
+        shouldContinuePredicting = false
+        return currentTokenCount
     }
     
     func generateResponseStream(from input: String, thinking: ThinkingMode = .none) -> AsyncStream<String> {
@@ -1485,6 +1511,23 @@ open class LLM: ObservableObject {
             await core.setStopSequence(nil)
             await core.setThinkingTokens(start: nil, end: nil, startMarker: nil, endMarker: nil)
         }
+    }
+    
+    /// Decode a stable prompt prefix (e.g. the fully formatted system block) into
+    /// the context without generating. Returns the prefix token count to pass to
+    /// `resetContext(keepingPrefixTokens:)` on later turns, or -1 on failure. Call
+    /// on a freshly reset context.
+    public func primeContext(_ text: String) async -> Int32 {
+        await core.ingest(text)
+    }
+    
+    /// Reset for a new turn while keeping a previously primed prefix's KV cells.
+    /// Re-decoding a large system prompt every turn dominates time-to-first-token;
+    /// priming it once and keeping it makes later turns pay only for the
+    /// conversation suffix.
+    public func resetContext(keepingPrefixTokens n: Int32) async {
+        history.removeAll()
+        await core.resetContext(keepingTokens: n)
     }
     
     open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
