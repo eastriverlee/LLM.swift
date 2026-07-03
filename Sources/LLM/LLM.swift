@@ -310,7 +310,7 @@ public actor LLMCore {
         return true
     }
     
-    func resetContext() {
+    public func resetContext() {
         currentTokenCount = 0
         tokenBuffer.removeAll()
         shouldContinuePredicting = false
@@ -1460,6 +1460,31 @@ open class LLM: ObservableObject {
     public func reset() {
         history.removeAll()
         Task { await core.resetContext() }
+    }
+    
+    /// Reset conversation state and await the context clear. Unlike `reset()`, whose
+    /// KV clear runs in a fire-and-forget task, this guarantees the clear has landed
+    /// before a subsequent `respond` enqueues on the core actor - a `respond` racing
+    /// ahead of the clear decodes onto stale cells and produces degenerate output.
+    public func resetContext() async {
+        history.removeAll()
+        await core.resetContext()
+    }
+    
+    /// Await until the current template's stop sequence and thinking tokens are
+    /// applied on the core. The `template` didSet applies them via a fire-and-forget
+    /// task, so a `respond` issued right after setting `template` can start
+    /// generating BEFORE the stop sequence lands - the model then runs straight
+    /// through its end-of-turn marker. Call (and await) this after setting
+    /// `template` and before `respond`.
+    public func syncTemplate() async {
+        if let template {
+            await core.setStopSequence(template.stopSequence)
+            await setupThinkingTokens(from: template)
+        } else {
+            await core.setStopSequence(nil)
+            await core.setThinkingTokens(start: nil, end: nil, startMarker: nil, endMarker: nil)
+        }
     }
     
     open func recoverFromLengthy(_ input: borrowing String, to output: borrowing AsyncStream<String>.Continuation) {
