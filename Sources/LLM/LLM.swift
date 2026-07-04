@@ -1819,7 +1819,7 @@ public struct HuggingFaceModel {
         let url = URL(string: "https://huggingface.co/\(name)/tree/main")!
         let data = try await url.getData()
         let content = String(data: data, encoding: .utf8)!
-        let downloadURLPattern = #"(?<=href=").*\.gguf\?download=true"#
+        let downloadURLPattern = #"(?<=href=")[^"]*\.gguf\?download=true"#
         let matches = try! downloadURLPattern.matches(in: content)
         let root = "https://huggingface.co"
         return matches.map { match in root + match }
