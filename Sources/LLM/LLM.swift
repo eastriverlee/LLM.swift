@@ -26,10 +26,47 @@ public typealias Chat = (role: Role, content: String)
 
 /// Core actor responsible for thread-safe interactions with the llama.cpp library.
 ///
+/// A thread-safe cancellation signal for stopping generation mid-stream.
+///
+/// The token generation loop runs as a single synchronous actor job, so
+/// actor-isolated state (like `shouldContinuePredicting`) written from outside
+/// can only be observed after the loop has already finished. This signal is
+/// readable from inside the loop and settable from any thread — from
+/// `LLM.stop()`, or from the response stream's `onTermination` when a consumer
+/// stops iterating — so generation can actually end early.
+final class CancelSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag = false
+
+    func cancel() {
+        lock.lock()
+        flag = true
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        flag = false
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return flag
+    }
+}
+
 /// `LLMCore` handles low-level operations including token encoding/decoding,
 /// context management, and inference. It ensures thread safety by using Swift's
 /// actor isolation.
 public actor LLMCore {
+    /// Cancellation signal checked once per generated token. A `let` of a
+    /// `Sendable` type, so it is accessible synchronously from outside the
+    /// actor — which is exactly what lets it interrupt the non-suspending
+    /// generation loop.
+    let cancelSignal = CancelSignal()
+
     private let model: Model
     private let vocab: Vocab
     private var context: OpaquePointer
@@ -225,6 +262,7 @@ public actor LLMCore {
         
         currentTokenCount += Int32(initialCount)
         shouldContinuePredicting = true
+        cancelSignal.reset()
         return true
     }
     
@@ -292,6 +330,7 @@ public actor LLMCore {
     
     func stopGeneration() {
         shouldContinuePredicting = false
+        cancelSignal.cancel()
     }
     
     private func injectTokensIntoContext(_ tokens: [Token]) -> Bool {
@@ -332,7 +371,21 @@ public actor LLMCore {
         
         let thinkingStream = AsyncStream<String> { thinkingContinuation = $0 }
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
-        
+
+        // A consumer that stops iterating the response stream (breaks out of
+        // `for await`, or its task is cancelled) should stop the model too —
+        // otherwise the abandoned generation runs to its natural end, burning
+        // compute and blocking the actor for the next request. Only the
+        // response stream carries this: the thinking stream is legitimately
+        // discarded by `generateResponseStream`, and `.finished` (the normal
+        // end) is excluded so completed generations are unaffected.
+        let cancelOnTermination = cancelSignal
+        responseContinuation.onTermination = { @Sendable reason in
+            if case .cancelled = reason {
+                cancelOnTermination.cancel()
+            }
+        }
+
         Task {
             guard prepareContext(for: input) else {
                 thinkingContinuation.finish()
@@ -398,7 +451,7 @@ public actor LLMCore {
                 pendingText.removeFirst(overflowLength)
             }
             
-            while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !cancelSignal.isCancelled && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let excludedTokens = shouldGuaranteeOutput ? [endToken] : []
                 let token = predictNextToken(excluding: excludedTokens)
                 shouldGuaranteeOutput = false
@@ -1454,6 +1507,10 @@ open class LLM: ObservableObject {
     }
     
     public func stop() {
+        // Signal synchronously so an in-flight generation stops at the next
+        // token — the actor hop alone can only run after the generation loop
+        // has already finished, which made `stop()` a no-op mid-generation.
+        core.cancelSignal.cancel()
         Task { await core.stopGeneration() }
     }
     
