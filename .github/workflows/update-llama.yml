@@ -1,0 +1,75 @@
+name: Update llama.cpp
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  update:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for a new release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST_TAG=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.tag_name')
+          CURRENT_TAG=$(grep -oE 'releases/download/[^/]+' Package.swift | cut -d/ -f3)
+          OPEN_FAILURE_ISSUE=$(gh issue list --state open --search "\"llama.cpp $LATEST_TAG update failed\" in:title" --json number --jq '.[].number' | head -1)
+          echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST_TAG" = "$CURRENT_TAG" ]; then
+            echo "Already on $LATEST_TAG."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$OPEN_FAILURE_ISSUE" ]; then
+            echo "Skipping $LATEST_TAG until issue #$OPEN_FAILURE_ISSUE is closed."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update and test
+        if: steps.release.outputs.skip != 'true'
+        run: bash update.sh
+
+      - name: Report failure and stop retrying this tag
+        if: failure() && steps.release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          gh issue create \
+            --title "llama.cpp $TAG update failed" \
+            --body "The automated update to [$TAG](https://github.com/ggml-org/llama.cpp/releases/tag/$TAG) failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Scheduled runs skip this tag while this issue is open. Close it to let the workflow retry."
+
+      - name: Merge and release
+        if: steps.release.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "llama.cpp-$TAG"
+          git add Package.swift Sources/LlamaChat/vendor
+          git commit -m "chore: Update llama.cpp to $TAG"
+          git push -u origin "llama.cpp-$TAG"
+          gh pr create \
+            --title "chore: Update llama.cpp to $TAG" \
+            --body "Automated update of the llama binary target and vendored common/chat sources to [$TAG](https://github.com/ggml-org/llama.cpp/releases/tag/$TAG). The full test suite passed in this workflow run."
+          gh pr merge "llama.cpp-$TAG" --squash --delete-branch
+
+          LATEST_VERSION=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
+          NEXT_VERSION=$(echo "$LATEST_VERSION" | awk -F. -v OFS=. '{$NF += 1; print}')
+          gh release create "$NEXT_VERSION" \
+            --target main \
+            --title "$NEXT_VERSION" \
+            --notes "Update llama.cpp to [$TAG](https://github.com/ggml-org/llama.cpp/releases/tag/$TAG)."

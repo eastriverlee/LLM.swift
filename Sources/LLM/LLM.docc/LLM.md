@@ -4,15 +4,17 @@ A Swift library providing an easy-to-use interface for running Large Language Mo
 
 ## Overview
 
-LLM.swift is a single-file Swift library that wraps llama.cpp to provide a native Swift interface for running large language models on Apple platforms. It supports iOS, macOS, tvOS, watchOS, and visionOS with hardware acceleration when available.
+LLM.swift wraps llama.cpp to provide a native Swift interface for running large language models on Apple platforms, with hardware acceleration when available. Conversations are rendered with the chat template embedded in the gguf file itself, and function calling uses each model's native tool-call format.
 
 ### Key Features
 
 - **Native Swift API** - ObservableObject integration for SwiftUI
-- **Cross-platform** - Supports all Apple platforms
-- **Hardware acceleration** - Utilizes Metal Performance Shaders when available
-- **Template system** - Built-in support for popular chat templates
-- **Streaming responses** - Real-time token generation via AsyncStream
+- **Cross-platform** - Supports iOS, macOS, tvOS, and visionOS
+- **Hardware acceleration** - Utilizes Metal when available
+- **Embedded chat templates** - Rendered by llama.cpp's own Jinja engine, with manual `Template` override
+- **Function calling** - Declare tools with the `Tool` protocol and `@Generatable` argument types
+- **Structured output** - Grammar-constrained JSON generation from `@Generatable` schemas
+- **Streaming responses** - Real-time token generation via AsyncStream, with thinking output separated
 - **Model management** - Direct downloads from Hugging Face
 
 ## Topics
@@ -31,6 +33,18 @@ LLM.swift is a single-file Swift library that wraps llama.cpp to provide a nativ
 - ``Chat``
 - ``Role``
 - ``Template``
+- ``ThinkingMode``
+
+### Function Calling
+
+- ``Tool``
+- ``ToolCall``
+- ``ToolError``
+
+### Structured Output
+
+- ``StructuredOutput``
+- ``StructuredOutputError``
 
 ### Utilities
 

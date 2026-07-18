@@ -24,6 +24,23 @@ let answer = await bot.getCompletion(from: question)
 print(answer)
 ```
 
+## Chat Templates
+By default, `LLM.swift` renders conversations using the chat template embedded in the gguf file itself, executed by `llama.cpp`'s own Jinja engine. This means you no longer have to pass a `template:` when initializing `LLM`—it just works with whatever template the model ships with:
+```swift
+let bot = try await LLM(from: HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M))!
+bot.systemPrompt = "You are a sentient AI with emotions."
+await bot.respond(to: "What's the meaning of life?")
+```
+`HuggingFaceModel`'s `template` parameter is now optional too, so `HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M)` uses the embedded template on its own. Thinking/reasoning separation (`bot.thinking`) works automatically for models that support it, with no marker configuration needed.
+
+If you still want manual control over the template—for instance, when a model's gguf metadata is broken or missing—pass a `Template` explicitly, exactly as before, and it will override the embedded one:
+```swift
+let bot = LLM(from: Bundle.main.url(forResource: "gemma-3-4b-it-q4_0", withExtension: "gguf")!, template: .gemma)
+```
+
+> [!NOTE]  
+> conversation context is now maintained incrementally between turns—only new tokens are evaluated, and history is not re-fed to the model every turn.
+
 ## Example
 
 <p align="center"><img src="./Screenshot.png" width="480"/></p>
@@ -182,6 +199,35 @@ The macro automatically:
 
 > [!TIP]  
 > Check `LLMTests.swift` for more comprehensive examples and use cases of `@Generatable`.
+
+## Function Calling (Tools)
+`LLM.swift` supports function calling (tool use), letting the model call into your own Swift code and use the result to answer the user. A tool is a type conforming to the `Tool` protocol, with its arguments declared as a nested type using the same `@Generatable` macro used for structured output—their JSON schema is derived automatically and advertised to the model:
+```swift
+struct GetWeather: Tool {
+    let description = "Get the current weather for a city"
+
+    @Generatable
+    struct Arguments {
+        let city: String
+    }
+
+    func call(_ arguments: Arguments) async throws -> String {
+        "It is sunny and 22 degrees celsius in \(arguments.city)."
+    }
+}
+
+let bot = try await LLM(from: HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M))!
+bot.systemPrompt = "You are a helpful assistant."
+bot.tools = [GetWeather()]
+await bot.respond(to: "What is the weather in Seoul right now?")
+```
+The tool's `name` defaults to the type name; provide a `name` property to override it.
+Tool calls use the model's native tool-call format, rendered and parsed by `llama.cpp`'s `common/chat` machinery and driven by the gguf's own template, so any model family with tool support in its chat template works, with no per-model configuration. This requires using the embedded-template path, so don't set a manual `template` when you want to use tools.
+
+Every tool call the model makes is recorded in `@Published var toolCalls: [ToolCall]`, including its name, arguments JSON, and result, so you can display it in your UI. Multiple tool-call rounds are supported, up to `maxToolTurns` (default `4`). If a tool throws, or its arguments fail to decode, the error text is fed back to the model so it can recover—`LLM.swift` itself does not throw in that case.
+
+> [!TIP]  
+> Check `LLMTests.swift` for more comprehensive examples and use cases of tool calling.
 
 ## Usage
 Add the package using SPM:
