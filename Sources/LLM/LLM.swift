@@ -32,20 +32,65 @@ public typealias Chat = (role: Role, content: String)
 /// context management, and inference. It ensures thread safety by using Swift's
 /// actor isolation.
 public actor LLMCore {
-    // the generation loop is one non-suspending actor job, so cancellation
-    // must live outside actor isolation to be visible mid-loop
-    private nonisolated let interruption = OSAllocatedUnfairLock(initialState: false)
+    // The generation loop is one non-suspending actor job, so cancellation must
+    // live outside actor isolation to be visible mid-loop.
+    //
+    // Cancellation is tracked PER GENERATION rather than as one shared flag.
+    // A single flag has two opposite failure modes, because "clear it" and
+    // "set it" both race against a generation starting:
+    //   • cleared too early — a new generation clearing the flag wipes the
+    //     cancellation aimed at the previous one, which then runs to completion
+    //     and blocks the actor (the new request waits behind it);
+    //   • still set too late — a leftover flag makes the next generation exit
+    //     before it emits a single token.
+    // Epochs remove both: an interrupt names the generation it is aimed at, and
+    // a new generation gets an epoch nothing has interrupted yet, so no clearing
+    // step is needed at all.
+    private struct InterruptionState {
+        var epoch: UInt64 = 0
+        var interruptedEpoch: UInt64?
+    }
 
+    private nonisolated let interruption = OSAllocatedUnfairLock(initialState: InterruptionState())
+
+    /// Claim the next generation epoch. Called once per generation, before its
+    /// task starts, so the epoch can be captured by that generation's loop and
+    /// by its stream-termination handler.
+    nonisolated func beginGenerationEpoch() -> UInt64 {
+        interruption.withLock { state in
+            state.epoch &+= 1
+            return state.epoch
+        }
+    }
+
+    /// Interrupt one specific generation. A stale interrupt (aimed at a
+    /// generation that already ended) can never affect a later one.
+    nonisolated func interrupt(epoch: UInt64) {
+        interruption.withLock { $0.interruptedEpoch = epoch }
+    }
+
+    /// Interrupt whichever generation is current — what `LLM.stop()` means.
+    /// Safe to call with nothing running: it marks the current epoch, and the
+    /// next generation claims a new one.
     public nonisolated func interrupt() {
-        interruption.withLock { $0 = true }
+        interruption.withLock { $0.interruptedEpoch = $0.epoch }
     }
 
+    /// Drop a pending interrupt. No longer needed to start a generation
+    /// (epochs make that implicit) and deliberately NOT called on that path —
+    /// doing so is what stranded the previous generation. Kept for callers
+    /// that want to explicitly rescind a stop.
     public nonisolated func clearInterruption() {
-        interruption.withLock { $0 = false }
+        interruption.withLock { $0.interruptedEpoch = nil }
     }
 
+    nonisolated func isInterrupted(epoch: UInt64) -> Bool {
+        interruption.withLock { $0.interruptedEpoch == epoch }
+    }
+
+    /// Whether the current generation has been interrupted.
     nonisolated var isInterrupted: Bool {
-        interruption.withLock { $0 }
+        interruption.withLock { $0.interruptedEpoch == $0.epoch }
     }
 
     private let model: Model
@@ -368,9 +413,14 @@ public actor LLMCore {
         let thinkingStream = AsyncStream<String> { thinkingContinuation = $0 }
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
 
+        // Claim this generation's epoch before the task starts, so both the
+        // termination handler and the loop below refer to THIS generation and
+        // not to whatever happens to be current when they run.
+        let epoch = beginGenerationEpoch()
+
         responseContinuation.onTermination = { [weak self] reason in
             if case .cancelled = reason {
-                self?.interrupt()
+                self?.interrupt(epoch: epoch)
             }
         }
 
@@ -439,7 +489,7 @@ public actor LLMCore {
                 pendingText.removeFirst(overflowLength)
             }
             
-            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted(epoch: epoch) && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let excludedTokens = shouldGuaranteeOutput ? [endToken] : []
                 let token = predictNextToken(excluding: excludedTokens)
                 shouldGuaranteeOutput = false
@@ -512,9 +562,13 @@ public actor LLMCore {
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
         let completionStream = AsyncStream<GeneratedMessage> { completionContinuation = $0 }
 
+        // See generateResponseStreamWithThinking: the epoch is claimed up front
+        // so cancellation names this generation specifically.
+        let epoch = beginGenerationEpoch()
+
         responseContinuation.onTermination = { [weak self] reason in
             if case .cancelled = reason {
-                self?.interrupt()
+                self?.interrupt(epoch: epoch)
             }
         }
 
@@ -544,7 +598,7 @@ public actor LLMCore {
             }
 
             var isFirstToken = true
-            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted(epoch: epoch) && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let token = predictNextToken(excluding: isFirstToken ? [endToken] : [])
                 isFirstToken = false
                 if token == endToken || token == endOfTurnToken { break }
@@ -640,6 +694,7 @@ public actor LLMCore {
     
     public func generateWithConstraints(from input: String, jsonSchema: String, thinking: ThinkingMode = .suppressed) throws -> String {
         debugLastGeneratedTokens = []
+        let epoch = beginGenerationEpoch()
         guard prepareContext(for: input) else { throw LLMError.contextCreationFailed }
 
         guard let grammarPointer = llm_chat_grammar_from_json_schema(jsonSchema) else {
@@ -652,7 +707,7 @@ public actor LLMCore {
         defer { llama_sampler_free(constrainedSampler) }
 
         var output = ""
-        while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+        while !isInterrupted(epoch: epoch) && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
             let token = llama_sampler_sample(constrainedSampler, context, batch.n_tokens - 1)
             if token == endToken || token == endOfTurnToken { break }
 
@@ -1193,8 +1248,10 @@ open class LLM: ObservableObject {
     }
     
     public func stop() {
+        // Synchronous and epoch-scoped: it stops the generation running now,
+        // and cannot leak into the next one. (A queued `stopGeneration()` could
+        // land mid-next-generation and kill it before its first token.)
         core.interrupt()
-        Task { await core.stopGeneration() }
     }
     
     public func reset() {
@@ -1211,7 +1268,6 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
-        core.clearInterruption()
         
         let response = await core.generateResponseStream(from: input)
         var output = ""
@@ -1228,7 +1284,6 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
-        core.clearInterruption()
         
         self.input = input
         let processedInput = preprocess(input, history, thinking)
@@ -1250,7 +1305,6 @@ open class LLM: ObservableObject {
 
         isAvailable = false
         defer { isAvailable = true }
-        core.clearInterruption()
 
         self.input = input
 
@@ -1387,7 +1441,6 @@ open class LLM: ObservableObject {
         as type: T.Type,
         thinking: ThinkingMode = .none
     ) async throws -> StructuredOutput<T> {
-        core.clearInterruption()
         let schemaPrompt = """
         \(prompt)
         

@@ -223,6 +223,62 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         #expect(bot.preprocess(userPrompt, [], .none) == template.preprocess(userPrompt, [], .none))
     }
+
+    //MARK: Interruption tests
+
+    /// Read at most `limit` tokens, optionally stopping the model at the limit.
+    /// Reads are bounded and history is cleared by the callers below so these
+    /// tests measure interruption only — an unbounded read lets the model
+    /// ramble, and the accumulated history then overruns the context, which
+    /// fails `prepareContext` for reasons that have nothing to do with `stop()`.
+    private func read(_ bot: LLM, _ prompt: String, limit: Int, stopping: Bool) async -> Int {
+        var count = 0
+        await bot.respond(to: prompt) { stream in
+            var output = ""
+            for await delta in stream {
+                output += delta
+                count += 1
+                if count >= limit {
+                    if stopping { bot.stop() }
+                    break
+                }
+            }
+            return output
+        }
+        return count
+    }
+
+    /// A `stop()` aimed at one generation must not leak into the next one.
+    /// Regression: with a single shared interruption flag, calling stop()
+    /// mid-generation left the following generation producing zero tokens.
+    @Test
+    func testStopDoesNotLeakIntoTheNextGeneration() async throws {
+        let bot = try await LLM(from: model)!
+
+        _ = await read(bot, "Write a long story about the sea.", limit: 3, stopping: true)
+        bot.history.removeAll()
+
+        let produced = await read(bot, "Say hi.", limit: 5, stopping: false)
+        #expect(produced > 0)
+    }
+
+    /// Repeated stop/generate cycles must keep working — an interruption must
+    /// never latch on permanently. Regression: every cycle after the first
+    /// produced zero tokens.
+    @Test
+    func testRepeatedStopAndGenerateCycles() async throws {
+        let bot = try await LLM(from: model)!
+
+        for _ in 0..<3 {
+            _ = await read(bot, "Write a long story about the sea.", limit: 3, stopping: true)
+            bot.history.removeAll()
+
+            let produced = await read(bot, "Say hi.", limit: 5, stopping: false)
+            #expect(produced > 0)
+
+            bot.history.removeAll()
+        }
+    }
     
     lazy var embeddedTemplateModel = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M)
 
