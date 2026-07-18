@@ -1,4 +1,5 @@
 import Foundation
+import os
 import llama
 import LlamaChat
 @_exported import LLMMacros
@@ -31,6 +32,22 @@ public typealias Chat = (role: Role, content: String)
 /// context management, and inference. It ensures thread safety by using Swift's
 /// actor isolation.
 public actor LLMCore {
+    // the generation loop is one non-suspending actor job, so cancellation
+    // must live outside actor isolation to be visible mid-loop
+    private nonisolated let interruption = OSAllocatedUnfairLock(initialState: false)
+
+    public nonisolated func interrupt() {
+        interruption.withLock { $0 = true }
+    }
+
+    public nonisolated func clearInterruption() {
+        interruption.withLock { $0 = false }
+    }
+
+    nonisolated var isInterrupted: Bool {
+        interruption.withLock { $0 }
+    }
+
     private let model: Model
     private let vocab: Vocab
     private var context: OpaquePointer
@@ -308,6 +325,7 @@ public actor LLMCore {
     
     func stopGeneration() {
         shouldContinuePredicting = false
+        interrupt()
     }
     
     private func injectTokensIntoContext(_ tokens: [Token]) -> Bool {
@@ -349,7 +367,13 @@ public actor LLMCore {
         
         let thinkingStream = AsyncStream<String> { thinkingContinuation = $0 }
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
-        
+
+        responseContinuation.onTermination = { [weak self] reason in
+            if case .cancelled = reason {
+                self?.interrupt()
+            }
+        }
+
         Task {
             guard prepareContext(for: input) else {
                 thinkingContinuation.finish()
@@ -415,7 +439,7 @@ public actor LLMCore {
                 pendingText.removeFirst(overflowLength)
             }
             
-            while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let excludedTokens = shouldGuaranteeOutput ? [endToken] : []
                 let token = predictNextToken(excluding: excludedTokens)
                 shouldGuaranteeOutput = false
@@ -488,6 +512,12 @@ public actor LLMCore {
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
         let completionStream = AsyncStream<GeneratedMessage> { completionContinuation = $0 }
 
+        responseContinuation.onTermination = { [weak self] reason in
+            if case .cancelled = reason {
+                self?.interrupt()
+            }
+        }
+
         Task {
             defer {
                 thinkingContinuation.finish()
@@ -514,7 +544,7 @@ public actor LLMCore {
             }
 
             var isFirstToken = true
-            while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let token = predictNextToken(excluding: isFirstToken ? [endToken] : [])
                 isFirstToken = false
                 if token == endToken || token == endOfTurnToken { break }
@@ -622,7 +652,7 @@ public actor LLMCore {
         defer { llama_sampler_free(constrainedSampler) }
 
         var output = ""
-        while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+        while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
             let token = llama_sampler_sample(constrainedSampler, context, batch.n_tokens - 1)
             if token == endToken || token == endOfTurnToken { break }
 
@@ -1163,6 +1193,7 @@ open class LLM: ObservableObject {
     }
     
     public func stop() {
+        core.interrupt()
         Task { await core.stopGeneration() }
     }
     
@@ -1180,6 +1211,7 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
         
         let response = await core.generateResponseStream(from: input)
         var output = ""
@@ -1196,6 +1228,7 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
         
         self.input = input
         let processedInput = preprocess(input, history, thinking)
@@ -1217,6 +1250,7 @@ open class LLM: ObservableObject {
 
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
 
         self.input = input
 
@@ -1270,6 +1304,8 @@ open class LLM: ObservableObject {
                 await recordToolCall(ToolCall(name: call.function.name, arguments: call.function.arguments, result: result))
                 messages.append(ChatMessage(role: "tool", content: result, toolCallID: call.id))
             }
+
+            if core.isInterrupted { return }
         }
     }
 
@@ -1351,6 +1387,7 @@ open class LLM: ObservableObject {
         as type: T.Type,
         thinking: ThinkingMode = .none
     ) async throws -> StructuredOutput<T> {
+        core.clearInterruption()
         let schemaPrompt = """
         \(prompt)
         

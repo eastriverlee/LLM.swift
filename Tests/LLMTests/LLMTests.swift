@@ -297,6 +297,20 @@ final class LLMTests {
     }
 
     @Test
+    func testStopInterruptsGeneration() async throws {
+        let bot = try await LLM(from: embeddedTemplateModel)!
+        let responder = Task { await bot.respond(to: "Write a very long, detailed story about the ocean.") }
+        for _ in 0..<600 {
+            if !bot.output.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        bot.stop()
+        await responder.value
+        #expect(!bot.output.isEmpty)
+        #expect(bot.output.count < 1000)
+    }
+
+    @Test
     func testToolCalling() async throws {
         let bot = try await LLM(from: embeddedTemplateModel)!
         bot.systemPrompt = "You are a helpful assistant."
@@ -877,7 +891,7 @@ final class LLMTests {
     }
     
     @Generatable
-    struct Task {
+    struct Ticket {
         let title: String
         let priority: Priority
         let assignee: Person
@@ -886,7 +900,7 @@ final class LLMTests {
     @Generatable
     struct Project {
         let name: String
-        let tasks: [Task]
+        let tickets: [Ticket]
         let teamLead: Person
         let office: Address
     }
@@ -897,7 +911,7 @@ final class LLMTests {
         bot.seed = 42
 
         let result = try await bot.respond(
-            to: "Create a software development project with tasks, team members, and office location details. Project name should be short and clear.",
+            to: "Create a software development project with tickets, team members, and office location details. Project name should be short and clear.",
             as: Project.self
         )
         let project = result.value
@@ -907,21 +921,21 @@ final class LLMTests {
         print("Raw output: \(output)")
         
         #expect(!project.name.isEmpty)
-        #expect(!project.tasks.isEmpty)
+        #expect(!project.tickets.isEmpty)
         #expect(!project.teamLead.name.isEmpty)
         #expect(project.teamLead.age > 0)
         #expect(!project.office.street.isEmpty)
         #expect(!project.office.city.isEmpty)
         
-        #expect(!project.tasks[0].title.isEmpty)
-        #expect(!project.tasks[0].assignee.name.isEmpty)
+        #expect(!project.tickets[0].title.isEmpty)
+        #expect(!project.tickets[0].assignee.name.isEmpty)
         
         let jsonData = output.data(using: String.Encoding.utf8)!
         let parsed = try JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
         let office = parsed["office"] as! [String: Any]
-        let tasks = parsed["tasks"] as! [Any]
-        let firstTask = tasks[0] as! [String: Any]
-        let assignee = firstTask["assignee"] as! [String: Any]
+        let tickets = parsed["tickets"] as! [Any]
+        let firstTicket = tickets[0] as! [String: Any]
+        let assignee = firstTicket["assignee"] as! [String: Any]
         
         #expect(office["street"] is String)
         #expect(office["city"] is String)
