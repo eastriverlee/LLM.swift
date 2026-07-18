@@ -1,4 +1,5 @@
 import Foundation
+import os
 import llama
 import LlamaChat
 @_exported import LLMMacros
@@ -27,46 +28,25 @@ public typealias Chat = (role: Role, content: String)
 
 /// Core actor responsible for thread-safe interactions with the llama.cpp library.
 ///
-/// A thread-safe cancellation signal for stopping generation mid-stream.
-///
-/// The token generation loop runs as a single synchronous actor job, so
-/// actor-isolated state (like `shouldContinuePredicting`) written from outside
-/// can only be observed after the loop has already finished. This signal is
-/// readable from inside the loop and settable from any thread — from
-/// `LLM.stop()`, or from the response stream's `onTermination` when a consumer
-/// stops iterating — so generation can actually end early.
-final class CancelSignal: @unchecked Sendable {
-    private let lock = NSLock()
-    private var flag = false
-
-    func cancel() {
-        lock.lock()
-        flag = true
-        lock.unlock()
-    }
-
-    func reset() {
-        lock.lock()
-        flag = false
-        lock.unlock()
-    }
-
-    var isCancelled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return flag
-    }
-}
-
 /// `LLMCore` handles low-level operations including token encoding/decoding,
 /// context management, and inference. It ensures thread safety by using Swift's
 /// actor isolation.
 public actor LLMCore {
-    /// Cancellation signal checked once per generated token. A `let` of a
-    /// `Sendable` type, so it is accessible synchronously from outside the
-    /// actor — which is exactly what lets it interrupt the non-suspending
-    /// generation loop.
-    let cancelSignal = CancelSignal()
+    // the generation loop is one non-suspending actor job, so cancellation
+    // must live outside actor isolation to be visible mid-loop
+    private nonisolated let interruption = OSAllocatedUnfairLock(initialState: false)
+
+    public nonisolated func interrupt() {
+        interruption.withLock { $0 = true }
+    }
+
+    public nonisolated func clearInterruption() {
+        interruption.withLock { $0 = false }
+    }
+
+    nonisolated var isInterrupted: Bool {
+        interruption.withLock { $0 }
+    }
 
     private let model: Model
     private let vocab: Vocab
@@ -279,7 +259,6 @@ public actor LLMCore {
         contextTokens = tokens
         currentTokenCount = Int32(tokens.count)
         shouldContinuePredicting = true
-        cancelSignal.reset()
         return true
     }
     
@@ -346,7 +325,7 @@ public actor LLMCore {
     
     func stopGeneration() {
         shouldContinuePredicting = false
-        cancelSignal.cancel()
+        interrupt()
     }
     
     private func injectTokensIntoContext(_ tokens: [Token]) -> Bool {
@@ -389,17 +368,9 @@ public actor LLMCore {
         let thinkingStream = AsyncStream<String> { thinkingContinuation = $0 }
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
 
-        // A consumer that stops iterating the response stream (breaks out of
-        // `for await`, or its task is cancelled) should stop the model too —
-        // otherwise the abandoned generation runs to its natural end, burning
-        // compute and blocking the actor for the next request. Only the
-        // response stream carries this: the thinking stream is legitimately
-        // discarded by `generateResponseStream`, and `.finished` (the normal
-        // end) is excluded so completed generations are unaffected.
-        let cancelOnTermination = cancelSignal
-        responseContinuation.onTermination = { @Sendable reason in
+        responseContinuation.onTermination = { [weak self] reason in
             if case .cancelled = reason {
-                cancelOnTermination.cancel()
+                self?.interrupt()
             }
         }
 
@@ -468,7 +439,7 @@ public actor LLMCore {
                 pendingText.removeFirst(overflowLength)
             }
             
-            while !cancelSignal.isCancelled && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let excludedTokens = shouldGuaranteeOutput ? [endToken] : []
                 let token = predictNextToken(excluding: excludedTokens)
                 shouldGuaranteeOutput = false
@@ -541,6 +512,12 @@ public actor LLMCore {
         let responseStream = AsyncStream<String> { responseContinuation = $0 }
         let completionStream = AsyncStream<GeneratedMessage> { completionContinuation = $0 }
 
+        responseContinuation.onTermination = { [weak self] reason in
+            if case .cancelled = reason {
+                self?.interrupt()
+            }
+        }
+
         Task {
             defer {
                 thinkingContinuation.finish()
@@ -567,7 +544,7 @@ public actor LLMCore {
             }
 
             var isFirstToken = true
-            while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+            while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
                 let token = predictNextToken(excluding: isFirstToken ? [endToken] : [])
                 isFirstToken = false
                 if token == endToken || token == endOfTurnToken { break }
@@ -675,7 +652,7 @@ public actor LLMCore {
         defer { llama_sampler_free(constrainedSampler) }
 
         var output = ""
-        while shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
+        while !isInterrupted && shouldContinuePredicting && currentTokenCount < Int32(maxTokenCount) {
             let token = llama_sampler_sample(constrainedSampler, context, batch.n_tokens - 1)
             if token == endToken || token == endOfTurnToken { break }
 
@@ -1216,10 +1193,7 @@ open class LLM: ObservableObject {
     }
     
     public func stop() {
-        // Signal synchronously so an in-flight generation stops at the next
-        // token — the actor hop alone can only run after the generation loop
-        // has already finished, which made `stop()` a no-op mid-generation.
-        core.cancelSignal.cancel()
+        core.interrupt()
         Task { await core.stopGeneration() }
     }
     
@@ -1237,6 +1211,7 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
         
         let response = await core.generateResponseStream(from: input)
         var output = ""
@@ -1253,6 +1228,7 @@ open class LLM: ObservableObject {
         
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
         
         self.input = input
         let processedInput = preprocess(input, history, thinking)
@@ -1274,6 +1250,7 @@ open class LLM: ObservableObject {
 
         isAvailable = false
         defer { isAvailable = true }
+        core.clearInterruption()
 
         self.input = input
 
@@ -1327,6 +1304,8 @@ open class LLM: ObservableObject {
                 await recordToolCall(ToolCall(name: call.function.name, arguments: call.function.arguments, result: result))
                 messages.append(ChatMessage(role: "tool", content: result, toolCallID: call.id))
             }
+
+            if core.isInterrupted { return }
         }
     }
 
@@ -1408,6 +1387,7 @@ open class LLM: ObservableObject {
         as type: T.Type,
         thinking: ThinkingMode = .none
     ) async throws -> StructuredOutput<T> {
+        core.clearInterruption()
         let schemaPrompt = """
         \(prompt)
         
