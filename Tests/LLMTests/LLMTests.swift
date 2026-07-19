@@ -223,6 +223,53 @@ final class LLMTests {
         let bot = try await LLM(from: model)!
         #expect(bot.preprocess(userPrompt, [], .none) == template.preprocess(userPrompt, [], .none))
     }
+
+    //MARK: Interruption tests
+
+    // reads are bounded so unbounded rambling cannot overrun the context,
+    // which would fail generation for reasons unrelated to interruption
+    private func read(_ bot: LLM, _ prompt: String, limit: Int, stopping: Bool) async -> Int {
+        var count = 0
+        await bot.respond(to: prompt) { stream in
+            var output = ""
+            for await delta in stream {
+                output += delta
+                count += 1
+                if count >= limit {
+                    if stopping { bot.stop() }
+                    break
+                }
+            }
+            return output
+        }
+        return count
+    }
+
+    @Test
+    func testStopDoesNotLeakIntoTheNextGeneration() async throws {
+        let bot = try await LLM(from: model)!
+
+        _ = await read(bot, "Write a long story about the sea.", limit: 3, stopping: true)
+        bot.history.removeAll()
+
+        let produced = await read(bot, "Say hi.", limit: 5, stopping: false)
+        #expect(produced > 0)
+    }
+
+    @Test
+    func testRepeatedStopAndGenerateCycles() async throws {
+        let bot = try await LLM(from: model)!
+
+        for _ in 0..<3 {
+            _ = await read(bot, "Write a long story about the sea.", limit: 3, stopping: true)
+            bot.history.removeAll()
+
+            let produced = await read(bot, "Say hi.", limit: 5, stopping: false)
+            #expect(produced > 0)
+
+            bot.history.removeAll()
+        }
+    }
     
     lazy var embeddedTemplateModel = HuggingFaceModel("unsloth/Qwen3-0.6B-GGUF", .Q4_K_M)
 
