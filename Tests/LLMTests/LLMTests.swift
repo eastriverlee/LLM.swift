@@ -226,11 +226,8 @@ final class LLMTests {
 
     //MARK: Interruption tests
 
-    /// Read at most `limit` tokens, optionally stopping the model at the limit.
-    /// Reads are bounded and history is cleared by the callers below so these
-    /// tests measure interruption only — an unbounded read lets the model
-    /// ramble, and the accumulated history then overruns the context, which
-    /// fails `prepareContext` for reasons that have nothing to do with `stop()`.
+    // reads are bounded so unbounded rambling cannot overrun the context,
+    // which would fail generation for reasons unrelated to interruption
     private func read(_ bot: LLM, _ prompt: String, limit: Int, stopping: Bool) async -> Int {
         var count = 0
         await bot.respond(to: prompt) { stream in
@@ -248,9 +245,6 @@ final class LLMTests {
         return count
     }
 
-    /// A `stop()` aimed at one generation must not leak into the next one.
-    /// Regression: with a single shared interruption flag, calling stop()
-    /// mid-generation left the following generation producing zero tokens.
     @Test
     func testStopDoesNotLeakIntoTheNextGeneration() async throws {
         let bot = try await LLM(from: model)!
@@ -262,9 +256,6 @@ final class LLMTests {
         #expect(produced > 0)
     }
 
-    /// Repeated stop/generate cycles must keep working — an interruption must
-    /// never latch on permanently. Regression: every cycle after the first
-    /// produced zero tokens.
     @Test
     func testRepeatedStopAndGenerateCycles() async throws {
         let bot = try await LLM(from: model)!
