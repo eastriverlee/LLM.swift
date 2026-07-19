@@ -246,6 +246,19 @@ final class LLMTests {
     }
 
     @Test
+    func testConfigurationSettlesBeforeResponding() async throws {
+        let bot = try await LLM(from: embeddedTemplateModel)!
+        bot.seed = 42
+        await bot.respond(to: "Say hello in one word.")
+        let firstOutput = bot.output
+
+        bot.reset()
+        bot.seed = 42
+        await bot.respond(to: "Say hello in one word.")
+        #expect(bot.output == firstOutput)
+    }
+
+    @Test
     func testStopDoesNotLeakIntoTheNextGeneration() async throws {
         let bot = try await LLM(from: model)!
 
@@ -954,7 +967,7 @@ final class LLMTests {
     
     @Test
     func testNestedGeneratableStructures() async throws {
-        let bot = try await LLM(from: model)!
+        let bot = try await LLM(from: model, maxTokenCount: 4096)!
         bot.seed = 42
 
         let result = try await bot.respond(
