@@ -41,7 +41,7 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
         return [
             """
             public static var jsonSchema: String {
-                return "{ \\"type\\": \\"object\\", \\"properties\\": {" + \(raw: propertyExprsStringFinal) + "}, \\"required\\": [" + \(raw: requiredExprStringFinal) + "] }"
+                return "{ \\"type\\": \\"object\\", \\"properties\\": {" + \(raw: propertyExprsStringFinal) + "}, \\"required\\": [" + \(raw: requiredExprStringFinal) + "], \\"additionalProperties\\": false }"
             }
             """
         ]
