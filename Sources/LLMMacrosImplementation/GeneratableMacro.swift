@@ -90,6 +90,12 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
             let elementSchema = schema(for: elementType, in: declaration, context: context)
             return "\"{ \\\"type\\\": \\\"array\\\", \\\"items\\\": \" + " + elementSchema + " + \" }\""
         }
+        if let memberType = type.as(MemberTypeSyntax.self),
+           memberType.baseType.as(IdentifierTypeSyntax.self)?.name.text == "Swift",
+           memberType.genericArgumentClause == nil,
+           let primitive = primitiveSchema(for: memberType.name.text) {
+            return "\"{ \\\"type\\\": \\\"" + primitive + "\\\" }\""
+        }
         if let identifierType = type.as(IdentifierTypeSyntax.self) {
             let typeName = identifierType.name.text
             if typeName == "Array", let elementType = singleGenericArgument(of: identifierType) {

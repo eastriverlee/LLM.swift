@@ -1085,4 +1085,32 @@ final class LLMTests {
         #expect(required.contains("tags"))
         #expect(!required.contains("aliases"))
     }
+
+    enum CustomTypes {
+        typealias String = Swift.String
+    }
+
+    @Generatable
+    struct ModuleQualifiedPrimitiveSpellingProfile {
+        let name: Swift.String
+        let count: Swift.Int
+        let score: Swift.Double
+        let ratio: Swift.Float
+        let enabled: Swift.Bool
+        let customName: CustomTypes.String
+    }
+
+    @Test
+    func testModuleQualifiedPrimitiveSpellingsJsonSchema() throws {
+        let data = ModuleQualifiedPrimitiveSpellingProfile.jsonSchema.data(using: .utf8)!
+        let schema = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let properties = schema["properties"] as! [String: Any]
+
+        #expect((properties["name"] as? [String: Any])?["type"] as? String == "string")
+        #expect((properties["count"] as? [String: Any])?["type"] as? String == "integer")
+        #expect((properties["score"] as? [String: Any])?["type"] as? String == "number")
+        #expect((properties["ratio"] as? [String: Any])?["type"] as? String == "number")
+        #expect((properties["enabled"] as? [String: Any])?["type"] as? String == "boolean")
+        #expect((properties["customName"] as? [String: Any])?.isEmpty == true)
+    }
 }
