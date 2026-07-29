@@ -1035,4 +1035,29 @@ final class LLMTests {
         #expect(properties.keys.contains("second"))
         #expect((parsed["required"] as? [String])?.isEmpty == true)
     }
+
+    @Generatable
+    struct GenericSpellingProfile {
+        let tags: Array<String>
+        let aliases: Optional<Array<String>>
+    }
+
+    @Test
+    func testGenericCollectionAndOptionalSpellingsJsonSchema() throws {
+        let data = GenericSpellingProfile.jsonSchema.data(using: .utf8)!
+        let schema = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let properties = schema["properties"] as! [String: Any]
+        let tags = properties["tags"] as! [String: Any]
+        let items = tags["items"] as! [String: Any]
+        let aliases = properties["aliases"] as! [String: Any]
+        let aliasItems = aliases["items"] as! [String: Any]
+        let required = schema["required"] as! [String]
+
+        #expect(tags["type"] as? String == "array")
+        #expect(items["type"] as? String == "string")
+        #expect(aliases["type"] as? String == "array")
+        #expect(aliasItems["type"] as? String == "string")
+        #expect(required.contains("tags"))
+        #expect(!required.contains("aliases"))
+    }
 }

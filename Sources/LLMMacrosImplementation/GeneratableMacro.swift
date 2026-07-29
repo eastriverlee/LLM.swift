@@ -24,12 +24,9 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
                 return nil
             }
             let type = typeAnno.type
-            let isOptional = type.is(OptionalTypeSyntax.self)
-            let unwrappedType: TypeSyntax = if isOptional {
-                type.as(OptionalTypeSyntax.self)!.wrappedType
-            } else {
-                type
-            }
+            let wrappedType = wrappedTypeIfOptional(type)
+            let isOptional = wrappedType != nil
+            let unwrappedType = wrappedType ?? type
             let schemaExpr = schema(for: unwrappedType, in: declaration, context: context)
             return (name, schemaExpr, !isOptional)
         }
@@ -82,8 +79,8 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
     }
 
     private static func schema(for type: TypeSyntax, in declaration: some DeclGroupSyntax, context: some MacroExpansionContext) -> String {
-        if let optionalType = type.as(OptionalTypeSyntax.self) {
-            return schema(for: optionalType.wrappedType, in: declaration, context: context)
+        if let wrappedType = wrappedTypeIfOptional(type) {
+            return schema(for: wrappedType, in: declaration, context: context)
         }
         if let arrayType = type.as(ArrayTypeSyntax.self) {
             let elementSchema = schema(for: arrayType.element, in: declaration, context: context)
@@ -91,6 +88,10 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
         }
         if let identifierType = type.as(IdentifierTypeSyntax.self) {
             let typeName = identifierType.name.text
+            if typeName == "Array", let elementType = singleGenericArgument(of: identifierType) {
+                let elementSchema = schema(for: elementType, in: declaration, context: context)
+                return "\"{ \\\"type\\\": \\\"array\\\", \\\"items\\\": \" + " + elementSchema + " + \" }\""
+            }
             if let primitive = primitiveSchema(for: typeName) {
                 return "\"{ \\\"type\\\": \\\"" + primitive + "\\\" }\""
             }
@@ -98,6 +99,28 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
             return typeName + ".jsonSchema"
         }
         return "\"{}\""
+    }
+
+    private static func wrappedTypeIfOptional(_ type: TypeSyntax) -> TypeSyntax? {
+        if let optionalType = type.as(OptionalTypeSyntax.self) {
+            return optionalType.wrappedType
+        }
+        guard let identifierType = type.as(IdentifierTypeSyntax.self),
+              identifierType.name.text == "Optional" else {
+            return nil
+        }
+        return singleGenericArgument(of: identifierType)
+    }
+
+    private static func singleGenericArgument(of type: IdentifierTypeSyntax) -> TypeSyntax? {
+        guard let arguments = type.genericArgumentClause?.arguments,
+              arguments.count == 1 else {
+            return nil
+        }
+        guard case .type(let argument) = arguments[arguments.startIndex].argument else {
+            return nil
+        }
+        return argument
     }
 
     private static func primitiveSchema(for typeName: String) -> String? {
