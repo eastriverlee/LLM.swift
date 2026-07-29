@@ -86,6 +86,10 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
             let elementSchema = schema(for: arrayType.element, in: declaration, context: context)
             return "\"{ \\\"type\\\": \\\"array\\\", \\\"items\\\": \" + " + elementSchema + " + \" }\""
         }
+        if let elementType = swiftGenericArgument(of: type, named: "Array") {
+            let elementSchema = schema(for: elementType, in: declaration, context: context)
+            return "\"{ \\\"type\\\": \\\"array\\\", \\\"items\\\": \" + " + elementSchema + " + \" }\""
+        }
         if let identifierType = type.as(IdentifierTypeSyntax.self) {
             let typeName = identifierType.name.text
             if typeName == "Array", let elementType = singleGenericArgument(of: identifierType) {
@@ -107,13 +111,26 @@ public struct GeneratableMacro: MemberMacro, ExtensionMacro {
         }
         guard let identifierType = type.as(IdentifierTypeSyntax.self),
               identifierType.name.text == "Optional" else {
-            return nil
+            return swiftGenericArgument(of: type, named: "Optional")
         }
         return singleGenericArgument(of: identifierType)
     }
 
+    private static func swiftGenericArgument(of type: TypeSyntax, named name: String) -> TypeSyntax? {
+        guard let memberType = type.as(MemberTypeSyntax.self),
+              memberType.name.text == name,
+              memberType.baseType.as(IdentifierTypeSyntax.self)?.name.text == "Swift" else {
+            return nil
+        }
+        return singleGenericArgument(in: memberType.genericArgumentClause)
+    }
+
     private static func singleGenericArgument(of type: IdentifierTypeSyntax) -> TypeSyntax? {
-        guard let arguments = type.genericArgumentClause?.arguments,
+        return singleGenericArgument(in: type.genericArgumentClause)
+    }
+
+    private static func singleGenericArgument(in clause: GenericArgumentClauseSyntax?) -> TypeSyntax? {
+        guard let arguments = clause?.arguments,
               arguments.count == 1 else {
             return nil
         }
