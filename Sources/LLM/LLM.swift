@@ -154,7 +154,7 @@ public actor LLMCore {
         llama_sampler_chain_add(sampler!, llama_sampler_init_dist(seed))
     }
     
-    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int) throws {
+    public init(model: Model, path: [CChar], seed: UInt32, topK: Int32, topP: Float, temp: Float, repeatPenalty: Float, repetitionLookback: Int32, maxTokenCount: Int, threads: Int32? = nil) throws {
         LLM.ensureInitialized()
         self.model = model
         self.vocab = llama_model_get_vocab(model)
@@ -168,12 +168,13 @@ public actor LLMCore {
         self.totalTokenCount = Int(llama_vocab_n_tokens(vocab))
         
         var contextParams = llama_context_default_params()
-        let processorCount = Int32(ProcessInfo().processorCount)
+        let processorCount = threads ?? Int32(ProcessInfo().processorCount)
         contextParams.n_ctx = UInt32(maxTokenCount)
         contextParams.n_batch = contextParams.n_ctx
         contextParams.n_threads = processorCount
         contextParams.n_threads_batch = processorCount
         contextParams.embeddings = true
+        contextParams.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED
         self.params = contextParams
         
         guard let context = llama_init_from_model(model, params) else {
@@ -606,9 +607,7 @@ public actor LLMCore {
     }
     
     private func prepareTokensForEmbeddings(from input: String) -> [Token] {
-        var tokens = encode(input)
-        if tokens.last == nullToken { tokens.removeLast() }
-        return tokens
+        return encode(input)
     }
     
     private func processBatchForEmbeddings(_ tokens: [Token]) throws {
@@ -635,10 +634,9 @@ public actor LLMCore {
     }
     
     private func extractEmbeddingsFromContext() throws -> [Float] {
-        guard let embeddingsPtr = llama_get_embeddings_ith(context, -1) else {
-            throw LLMError.embeddingsFailed
-        }
-        
+        let ptr = llama_get_embeddings_seq(context, 0) ?? llama_get_embeddings_ith(context, -1)
+        guard let embeddingsPtr = ptr else { throw LLMError.embeddingsFailed }
+
         let embeddingDimension = Int(llama_model_n_embd(model))
         var embeddingsArray: [Float] = []
         embeddingsArray.reserveCapacity(embeddingDimension)
@@ -647,7 +645,8 @@ public actor LLMCore {
             embeddingsArray.append(embeddingsPtr[i])
         }
         
-        return embeddingsArray
+        let norm = embeddingsArray.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        return norm > 0 ? embeddingsArray.map { $0 / norm } : embeddingsArray
     }
     
     public func getLastGeneratedTokens() -> [Token] {
@@ -1039,7 +1038,9 @@ open class LLM: ObservableObject {
         repeatPenalty: Float = 1.2,
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048
+        maxTokenCount: Int32 = 2048,
+        gpuLayers: Int32? = nil,
+        threads: Int32? = nil
     ) {
         LLM.silenceLogging()
         self.path = path.cString(using: .utf8)!
@@ -1059,6 +1060,7 @@ open class LLM: ObservableObject {
         #if targetEnvironment(simulator)
         modelParams.n_gpu_layers = 0
         #endif
+        if let gpuLayers { modelParams.n_gpu_layers = gpuLayers }
         guard let model = llama_model_load_from_file(self.path, modelParams) else {
             return nil
         }
@@ -1076,7 +1078,8 @@ open class LLM: ObservableObject {
                 temp: temp,
                 repeatPenalty: repeatPenalty,
                 repetitionLookback: repetitionLookback,
-                maxTokenCount: finalMaxTokenCount
+                maxTokenCount: finalMaxTokenCount,
+                threads: threads
             )
             
             if let stopSequence {
@@ -1129,7 +1132,9 @@ open class LLM: ObservableObject {
         repeatPenalty: Float = 1.2,
         repetitionLookback: Int32 = 64,
         historyLimit: Int = 8,
-        maxTokenCount: Int32 = 2048
+        maxTokenCount: Int32 = 2048,
+        gpuLayers: Int32? = nil,
+        threads: Int32? = nil
     ) {
         self.init(
             from: url.path,
@@ -1142,7 +1147,9 @@ open class LLM: ObservableObject {
             repeatPenalty: repeatPenalty,
             repetitionLookback: repetitionLookback,
             historyLimit: historyLimit,
-            maxTokenCount: maxTokenCount
+            maxTokenCount: maxTokenCount,
+            gpuLayers: gpuLayers,
+            threads: threads
         )
         self.preprocess = template.preprocess
         self.template = template
